@@ -2,6 +2,8 @@ import {
     Button,
     CheckBox,
     ComboBox,
+    LineEdit,
+    ListView,
     Palette,
     ScrollView,
     Spinner,
@@ -13,6 +15,31 @@ import {
 export struct RecentGenerationItem {
     preview: image,
     label: string,
+    selected: bool,
+}
+
+export struct HistorySessionItem {
+    id: string,
+    title: string,
+    subtitle: string,
+    selected: bool,
+}
+
+export struct HistoryGenerationItem {
+    id: string,
+    timestamp: string,
+    prompt: string,
+    model: string,
+    dimensions: string,
+    available: bool,
+    selected: bool,
+}
+
+export struct ErrorLogItem {
+    id: string,
+    timestamp: string,
+    category: string,
+    summary: string,
     selected: bool,
 }
 
@@ -65,7 +92,9 @@ component CompactHeader {
     in property <string> status-details;
     in property <bool> configured;
     in property <bool> busy;
+    in-out property <string> navigation-value;
     callback test-connection();
+    callback navigation-changed(string);
 
     height: root.compact ? 144px : 104px;
 
@@ -73,7 +102,7 @@ component CompactHeader {
         border-width: 1px;
         border-color: Palette.border;
         border-radius: 8px;
-        background: Palette.alternate-background;
+        background: Palette.alternate-background.transparentize(0.06);
 
         VerticalLayout {
             padding: 12px;
@@ -91,12 +120,17 @@ component CompactHeader {
                 VerticalLayout {
                     spacing: 0px;
                     horizontal-stretch: 1;
-                    Text {
-                        text: "A6 Image Studio";
-                        color: Palette.foreground;
-                        font-size: 20px;
-                        font-weight: 680;
-                        vertical-alignment: center;
+                    ComboBox {
+                        model: [
+                            "A6 Image Studio · Create",
+                            "A6 Image Studio · History",
+                            "A6 Image Studio · Error log",
+                            "A6 Image Studio · Settings"
+                        ];
+                        current-value <=> root.navigation-value;
+                        min-width: 260px;
+                        horizontal-stretch: 0;
+                        selected(value) => { root.navigation-changed(value); }
                     }
                     Text {
                         text: root.model-text + "  ·  " + root.connection-status;
@@ -179,7 +213,7 @@ component GenerationPanel {
         border-width: 1px;
         border-color: Palette.border;
         border-radius: 8px;
-        background: Palette.alternate-background;
+        background: Palette.alternate-background.transparentize(0.06);
 
         VerticalLayout {
             padding: 14px;
@@ -494,7 +528,7 @@ component ResultPanel {
     callback select-recent(int);
 
     property <bool> generating: root.busy && root.operation-status == "Generating image";
-    height: 642px
+    height: 706px
         + (root.result-size-warning != "" ? (root.compact ? 108px : 74px) : 0px)
         + (root.details-expanded && root.has-result ? 252px : 0px);
     min-width: 360px;
@@ -505,7 +539,7 @@ component ResultPanel {
         border-width: 1px;
         border-color: Palette.border;
         border-radius: 8px;
-        background: Palette.alternate-background;
+        background: Palette.alternate-background.transparentize(0.06);
 
         VerticalLayout {
             padding: 14px;
@@ -541,7 +575,7 @@ component ResultPanel {
                     color: Palette.foreground;
                     wrap: word-wrap;
                     overflow: elide;
-                    accessible-label: "Image size warning: " + root.result-size-warning;
+                    accessible-label: "Provider size information: " + root.result-size-warning;
                 }
             }
 
@@ -604,39 +638,59 @@ component ResultPanel {
                 }
             }
 
-            if root.has-result: HorizontalLayout {
-                spacing: 8px;
-                Button {
-                    text: "Save As…";
-                    enabled: !root.action-busy;
-                    clicked => { root.save-as(); }
-                }
-                Button {
-                    text: "Copy image";
-                    enabled: !root.action-busy;
-                    clicked => { root.copy-image(); }
-                }
-                Button {
-                    text: "Copy prompt";
-                    enabled: !root.action-busy;
-                    clicked => { root.copy-prompt(); }
-                }
-                Rectangle { horizontal-stretch: 1; }
-            }
+            if root.has-result: Rectangle {
+                height: 94px;
+                border-width: 1px;
+                border-color: Palette.border;
+                border-radius: 6px;
+                background: Palette.background.transparentize(0.18);
 
-            if root.has-result: HorizontalLayout {
-                spacing: 8px;
-                Button {
-                    text: "Regenerate";
-                    enabled: !root.busy && !root.action-busy;
-                    clicked => { root.regenerate(); }
+                VerticalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    padding-top: 9px;
+                    padding-bottom: 11px;
+                    spacing: 8px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button {
+                            text: root.details-expanded ? "Request details  ▴" : "Request details  ▾";
+                            clicked => { root.details-expanded = !root.details-expanded; }
+                        }
+                        Button {
+                            text: "Save As…";
+                            enabled: !root.action-busy;
+                            clicked => { root.save-as(); }
+                        }
+                        Button {
+                            text: "Copy image";
+                            enabled: !root.action-busy;
+                            clicked => { root.copy-image(); }
+                        }
+                        Button {
+                            text: "Copy prompt";
+                            enabled: !root.action-busy;
+                            clicked => { root.copy-prompt(); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button {
+                            text: "Regenerate";
+                            enabled: !root.busy && !root.action-busy;
+                            clicked => { root.regenerate(); }
+                        }
+                        Button {
+                            text: "Open folder";
+                            enabled: !root.action-busy;
+                            clicked => { root.open-containing-folder(); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
                 }
-                Button {
-                    text: "Open folder";
-                    enabled: !root.action-busy;
-                    clicked => { root.open-containing-folder(); }
-                }
-                Rectangle { horizontal-stretch: 1; }
             }
 
             if root.action-status != "": Text {
@@ -647,17 +701,7 @@ component ResultPanel {
                 min-height: 22px;
             }
 
-            if root.has-result: VerticalLayout {
-                spacing: 7px;
-                HorizontalLayout {
-                    Button {
-                        text: root.details-expanded ? "Request details  ▴" : "Request details  ▾";
-                        horizontal-stretch: 0;
-                        clicked => { root.details-expanded = !root.details-expanded; }
-                    }
-                    Rectangle { horizontal-stretch: 1; }
-                }
-                if root.details-expanded: Rectangle {
+            if root.has-result && root.details-expanded: Rectangle {
                     height: 230px;
                     border-width: 1px;
                     border-color: Palette.border;
@@ -702,6 +746,911 @@ component ResultPanel {
                             overflow: elide;
                         }
                     }
+            }
+        }
+    }
+}
+
+component HistorySessionList {
+    in property <[HistorySessionItem]> sessions;
+    callback select-session(string);
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 6px;
+        background: Palette.background.transparentize(0.12);
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 7px;
+            Text {
+                text: "Sessions";
+                color: Palette.foreground;
+                font-weight: 650;
+            }
+            ListView {
+                for session in root.sessions: Rectangle {
+                    height: 62px;
+                    border-width: session.selected ? 2px : 1px;
+                    border-color: session.selected ? Palette.accent-background : Palette.border;
+                    border-radius: 5px;
+                    background: session.selected
+                        ? Palette.accent-background.transparentize(0.82)
+                        : Palette.alternate-background.transparentize(0.12);
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 2px;
+                        Text {
+                            text: session.title;
+                            color: Palette.foreground;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: session.subtitle;
+                            color: Palette.foreground;
+                            opacity: 0.68;
+                            font-size: 12px;
+                            overflow: elide;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.select-session(session.id); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component HistoryRequestList {
+    in property <[HistoryGenerationItem]> generations;
+    callback select-generation(string);
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 6px;
+        background: Palette.background.transparentize(0.12);
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 7px;
+            Text {
+                text: "Requests in session";
+                color: Palette.foreground;
+                font-weight: 650;
+            }
+            ListView {
+                for generation in root.generations: Rectangle {
+                    height: 88px;
+                    border-width: generation.selected ? 2px : 1px;
+                    border-color: generation.selected
+                        ? Palette.accent-background
+                        : Palette.border;
+                    border-radius: 5px;
+                    background: generation.selected
+                        ? Palette.accent-background.transparentize(0.82)
+                        : Palette.alternate-background.transparentize(0.12);
+                    VerticalLayout {
+                        padding: 7px;
+                        spacing: 2px;
+                        Text {
+                            text: generation.timestamp + "  ·  " + generation.dimensions;
+                            color: Palette.foreground;
+                            font-size: 12px;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: generation.prompt;
+                            color: Palette.foreground;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: generation.available
+                                ? generation.model
+                                : "Image file missing  ·  " + generation.model;
+                            color: generation.available ? Palette.foreground : #e8a04b;
+                            opacity: 0.72;
+                            font-size: 12px;
+                            overflow: elide;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.select-generation(generation.id); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component HistoryDetail {
+    in property <bool> has-selection;
+    in property <bool> selected-file-available;
+    in property <image> selected-preview;
+    in property <string> selected-timestamp;
+    in property <string> selected-session;
+    in property <string> selected-prompt;
+    in property <string> selected-model;
+    in property <string> selected-settings;
+    in property <string> selected-dimensions;
+    in property <string> selected-path;
+    in property <string> selected-request-id;
+    callback use-selected();
+    callback open-selected-folder();
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 6px;
+        background: Palette.background.transparentize(0.12);
+
+        if !root.has-selection: VerticalLayout {
+            alignment: center;
+            Text {
+                text: "Choose a saved request to inspect it.";
+                color: Palette.foreground;
+                opacity: 0.66;
+                horizontal-alignment: center;
+            }
+        }
+
+        if root.has-selection: VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+            Rectangle {
+                min-height: 260px;
+                vertical-stretch: 1;
+                border-width: 1px;
+                border-color: Palette.border;
+                border-radius: 5px;
+                background: Palette.alternate-background.transparentize(0.1);
+                clip: true;
+                if root.selected-file-available: Image {
+                    x: 8px;
+                    y: 8px;
+                    width: parent.width - 16px;
+                    height: parent.height - 16px;
+                    source: root.selected-preview;
+                    image-fit: contain;
+                    accessible-label: "Selected history image";
+                }
+                if !root.selected-file-available: Text {
+                    x: 12px;
+                    width: parent.width - 24px;
+                    height: parent.height;
+                    text: "The generated image was deleted or moved. Its prompt and metadata remain available, but image actions are disabled.";
+                    color: #e8a04b;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            Text {
+                text: root.selected-timestamp + "  ·  " + root.selected-dimensions;
+                color: Palette.foreground;
+                font-weight: 650;
+                overflow: elide;
+            }
+            Text {
+                text: root.selected-prompt;
+                color: Palette.foreground;
+                height: 54px;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+            Text {
+                text: root.selected-model + "  ·  " + root.selected-settings;
+                color: Palette.foreground;
+                opacity: 0.72;
+                height: 40px;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+            Text {
+                text: "Session  " + root.selected-session
+                    + "    ·    Request ID  " + root.selected-request-id;
+                color: Palette.foreground;
+                opacity: 0.68;
+                overflow: elide;
+            }
+            Text {
+                text: root.selected-path;
+                color: Palette.foreground;
+                opacity: 0.68;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: "Load in Create";
+                    clicked => { root.use-selected(); }
+                }
+                Button {
+                    text: "Open folder";
+                    enabled: root.selected-file-available;
+                    clicked => { root.open-selected-folder(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+    }
+}
+
+component HistoryPage {
+    in property <bool> compact;
+    in property <[HistorySessionItem]> sessions;
+    in property <[HistoryGenerationItem]> generations;
+    in-out property <string> search-text;
+    in property <bool> has-selection;
+    in property <bool> selected-file-available;
+    in property <image> selected-preview;
+    in property <string> selected-timestamp;
+    in property <string> selected-session;
+    in property <string> selected-prompt;
+    in property <string> selected-model;
+    in property <string> selected-settings;
+    in property <string> selected-dimensions;
+    in property <string> selected-path;
+    in property <string> selected-request-id;
+    in property <string> status-text;
+    callback search-changed(string);
+    callback select-session(string);
+    callback select-generation(string);
+    callback use-selected();
+    callback open-selected-folder();
+    callback clear-history();
+
+    height: root.compact ? 1330px : 720px;
+    min-width: 460px;
+    vertical-stretch: 0;
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 8px;
+        background: Palette.alternate-background.transparentize(0.05);
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                SectionTitle {
+                    text: "Generation history";
+                    horizontal-stretch: 1;
+                }
+                Button {
+                    text: "Clear history";
+                    enabled: root.sessions.length > 0;
+                    clicked => { root.clear-history(); }
+                }
+            }
+
+            Text {
+                text: "Search prompts, models, paths, request IDs, timestamps, or sessions.";
+                color: Palette.foreground;
+                opacity: 0.72;
+            }
+            LineEdit {
+                height: 40px;
+                vertical-stretch: 0;
+                text <=> root.search-text;
+                placeholder-text: "Search generation history";
+                edited(value) => { root.search-changed(value); }
+            }
+
+            if !root.compact: HorizontalLayout {
+                spacing: 12px;
+                HistorySessionList {
+                    width: 270px;
+                    sessions: root.sessions;
+                    select-session(id) => { root.select-session(id); }
+                }
+                HistoryRequestList {
+                    width: 310px;
+                    generations: root.generations;
+                    select-generation(id) => { root.select-generation(id); }
+                }
+                HistoryDetail {
+                    horizontal-stretch: 1;
+                    min-width: 320px;
+                    has-selection: root.has-selection;
+                    selected-file-available: root.selected-file-available;
+                    selected-preview: root.selected-preview;
+                    selected-timestamp: root.selected-timestamp;
+                    selected-session: root.selected-session;
+                    selected-prompt: root.selected-prompt;
+                    selected-model: root.selected-model;
+                    selected-settings: root.selected-settings;
+                    selected-dimensions: root.selected-dimensions;
+                    selected-path: root.selected-path;
+                    selected-request-id: root.selected-request-id;
+                    use-selected => { root.use-selected(); }
+                    open-selected-folder => { root.open-selected-folder(); }
+                }
+            }
+
+            if root.compact: VerticalLayout {
+                spacing: 12px;
+                HistorySessionList {
+                    height: 220px;
+                    sessions: root.sessions;
+                    select-session(id) => { root.select-session(id); }
+                }
+                HistoryRequestList {
+                    height: 250px;
+                    generations: root.generations;
+                    select-generation(id) => { root.select-generation(id); }
+                }
+                HistoryDetail {
+                    height: 580px;
+                    has-selection: root.has-selection;
+                    selected-file-available: root.selected-file-available;
+                    selected-preview: root.selected-preview;
+                    selected-timestamp: root.selected-timestamp;
+                    selected-session: root.selected-session;
+                    selected-prompt: root.selected-prompt;
+                    selected-model: root.selected-model;
+                    selected-settings: root.selected-settings;
+                    selected-dimensions: root.selected-dimensions;
+                    selected-path: root.selected-path;
+                    selected-request-id: root.selected-request-id;
+                    use-selected => { root.use-selected(); }
+                    open-selected-folder => { root.open-selected-folder(); }
+                }
+            }
+
+            if root.status-text != "": Text {
+                text: root.status-text;
+                color: Palette.foreground;
+                opacity: 0.76;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+component ErrorEntryList {
+    in property <[ErrorLogItem]> entries;
+    callback select-entry(string);
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 6px;
+        background: Palette.background.transparentize(0.12);
+        VerticalLayout {
+            padding: 8px;
+            spacing: 7px;
+            Text {
+                text: "Entries";
+                color: Palette.foreground;
+                font-weight: 650;
+            }
+            ListView {
+                for entry in root.entries: Rectangle {
+                    height: 90px;
+                    border-width: entry.selected ? 2px : 1px;
+                    border-color: entry.selected
+                        ? Palette.accent-background
+                        : Palette.border;
+                    border-radius: 5px;
+                    background: entry.selected
+                        ? Palette.accent-background.transparentize(0.82)
+                        : Palette.alternate-background.transparentize(0.12);
+                    VerticalLayout {
+                        padding: 7px;
+                        spacing: 2px;
+                        Text {
+                            text: entry.timestamp + "  ·  " + entry.category;
+                            color: Palette.foreground;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: entry.summary;
+                            color: Palette.foreground;
+                            height: 40px;
+                            wrap: word-wrap;
+                            overflow: elide;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.select-entry(entry.id); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component ErrorDetail {
+    in property <bool> has-selection;
+    in property <string> selected-timestamp;
+    in property <string> selected-session;
+    in property <string> selected-operation;
+    in property <string> selected-category;
+    in property <string> selected-prompt;
+    in property <string> selected-model;
+    in property <string> selected-endpoint;
+    in property <string> selected-request-id;
+    in property <string> selected-summary;
+    in property <string> selected-full-response;
+    in property <bool> selected-response-truncated;
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 6px;
+        background: Palette.background.transparentize(0.12);
+
+        if !root.has-selection: VerticalLayout {
+            alignment: center;
+            Text {
+                text: "Choose an error to inspect its bound request and provider response.";
+                color: Palette.foreground;
+                opacity: 0.66;
+                horizontal-alignment: center;
+            }
+        }
+        if root.has-selection: VerticalLayout {
+            padding: 10px;
+            spacing: 7px;
+            Text {
+                text: root.selected-timestamp + "  ·  " + root.selected-category;
+                color: Palette.foreground;
+                font-weight: 650;
+            }
+            Text {
+                text: "Session  " + root.selected-session
+                    + "    ·    Operation  " + root.selected-operation;
+                color: Palette.foreground;
+                opacity: 0.72;
+                overflow: elide;
+            }
+            Text {
+                text: "Model  " + root.selected-model
+                    + "    ·    Request ID  " + root.selected-request-id;
+                color: Palette.foreground;
+                opacity: 0.72;
+                overflow: elide;
+            }
+            Text {
+                text: "Endpoint  " + root.selected-endpoint;
+                color: Palette.foreground;
+                opacity: 0.72;
+                overflow: elide;
+            }
+            Text {
+                text: "Prompt  " + root.selected-prompt;
+                color: Palette.foreground;
+                height: 52px;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+            Rectangle {
+                height: 76px;
+                border-width: 1px;
+                border-color: Palette.border;
+                border-radius: 5px;
+                background: Palette.alternate-background.transparentize(0.08);
+                Text {
+                    x: 8px;
+                    y: 6px;
+                    width: parent.width - 16px;
+                    height: parent.height - 12px;
+                    text: root.selected-summary;
+                    color: Palette.foreground;
+                    wrap: word-wrap;
+                    overflow: elide;
+                }
+            }
+            Text {
+                text: root.selected-response-truncated
+                    ? "Provider response (truncated at the 1 MiB safety limit)"
+                    : "Full provider response";
+                color: Palette.foreground;
+                font-weight: 650;
+            }
+            TextEdit {
+                text: root.selected-full-response == ""
+                    ? "No HTTP response body was available for this error."
+                    : root.selected-full-response;
+                read-only: true;
+                wrap: word-wrap;
+                vertical-stretch: 1;
+            }
+        }
+    }
+}
+
+component ErrorLogPage {
+    in property <bool> compact;
+    in property <[ErrorLogItem]> entries;
+    in-out property <string> search-text;
+    in property <bool> has-selection;
+    in property <string> selected-timestamp;
+    in property <string> selected-session;
+    in property <string> selected-operation;
+    in property <string> selected-category;
+    in property <string> selected-prompt;
+    in property <string> selected-model;
+    in property <string> selected-endpoint;
+    in property <string> selected-request-id;
+    in property <string> selected-summary;
+    in property <string> selected-full-response;
+    in property <bool> selected-response-truncated;
+    in property <string> status-text;
+    callback search-changed(string);
+    callback select-entry(string);
+    callback clear-errors();
+
+    height: root.compact ? 1080px : 720px;
+    min-width: 460px;
+    vertical-stretch: 0;
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 8px;
+        background: Palette.alternate-background.transparentize(0.05);
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                SectionTitle {
+                    text: "Error log";
+                    horizontal-stretch: 1;
+                }
+                Button {
+                    text: "Clear error log";
+                    enabled: root.entries.length > 0;
+                    clicked => { root.clear-errors(); }
+                }
+            }
+            Text {
+                text: "Provider bodies are preserved up to the safety limit after API-key redaction. Image payloads are never logged.";
+                color: Palette.foreground;
+                opacity: 0.72;
+                wrap: word-wrap;
+            }
+            LineEdit {
+                height: 40px;
+                vertical-stretch: 0;
+                text <=> root.search-text;
+                placeholder-text: "Search errors, prompts, sessions, request IDs, or response bodies";
+                edited(value) => { root.search-changed(value); }
+            }
+
+            if !root.compact: HorizontalLayout {
+                spacing: 12px;
+                ErrorEntryList {
+                    width: 390px;
+                    entries: root.entries;
+                    select-entry(id) => { root.select-entry(id); }
+                }
+                ErrorDetail {
+                    horizontal-stretch: 1;
+                    has-selection: root.has-selection;
+                    selected-timestamp: root.selected-timestamp;
+                    selected-session: root.selected-session;
+                    selected-operation: root.selected-operation;
+                    selected-category: root.selected-category;
+                    selected-prompt: root.selected-prompt;
+                    selected-model: root.selected-model;
+                    selected-endpoint: root.selected-endpoint;
+                    selected-request-id: root.selected-request-id;
+                    selected-summary: root.selected-summary;
+                    selected-full-response: root.selected-full-response;
+                    selected-response-truncated: root.selected-response-truncated;
+                }
+            }
+
+            if root.compact: VerticalLayout {
+                spacing: 12px;
+                ErrorEntryList {
+                    height: 260px;
+                    entries: root.entries;
+                    select-entry(id) => { root.select-entry(id); }
+                }
+                ErrorDetail {
+                    horizontal-stretch: 1;
+                    has-selection: root.has-selection;
+                    selected-timestamp: root.selected-timestamp;
+                    selected-session: root.selected-session;
+                    selected-operation: root.selected-operation;
+                    selected-category: root.selected-category;
+                    selected-prompt: root.selected-prompt;
+                    selected-model: root.selected-model;
+                    selected-endpoint: root.selected-endpoint;
+                    selected-request-id: root.selected-request-id;
+                    selected-summary: root.selected-summary;
+                    selected-full-response: root.selected-full-response;
+                    selected-response-truncated: root.selected-response-truncated;
+                }
+            }
+
+            if root.status-text != "": Text {
+                text: root.status-text;
+                color: Palette.foreground;
+                opacity: 0.76;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+component SettingsPage {
+    in property <bool> compact;
+    in-out property <string> base-url;
+    in-out property <string> model-id;
+    in-out property <string> default-size;
+    in-out property <string> default-quality;
+    in-out property <string> default-format;
+    in-out property <string> output-directory;
+    in-out property <int> request-timeout;
+    in-out property <bool> retain-history;
+    in-out property <string> api-key-entry;
+    in property <string> api-key-source;
+    in property <string> api-key-mask;
+    in property <string> override-note;
+    in property <string> status-text;
+    in property <bool> busy;
+    callback save-settings();
+    callback choose-output-directory();
+    callback store-api-key();
+    callback forget-api-key();
+
+    height: root.compact ? 1040px : 720px;
+    min-width: 460px;
+    vertical-stretch: 0;
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 8px;
+        background: Palette.alternate-background.transparentize(0.05);
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 13px;
+
+            SectionTitle { text: "Settings"; }
+            Text {
+                text: "Ordinary preferences are stored in XDG configuration. The API key is never written to JSON or TOML.";
+                color: Palette.foreground;
+                opacity: 0.72;
+                wrap: word-wrap;
+            }
+
+            if !root.compact: HorizontalLayout {
+                spacing: 14px;
+                VerticalLayout {
+                    spacing: 5px;
+                    Text { text: "Base URL"; color: Palette.foreground; font-weight: 600; }
+                    LineEdit {
+                        text <=> root.base-url;
+                        enabled: !root.busy;
+                        placeholder-text: "https://api.a6api.com";
+                    }
+                }
+                VerticalLayout {
+                    spacing: 5px;
+                    Text { text: "Model ID"; color: Palette.foreground; font-weight: 600; }
+                    LineEdit {
+                        text <=> root.model-id;
+                        enabled: !root.busy;
+                        placeholder-text: "gpt-image-2";
+                    }
+                }
+            }
+
+            if root.compact: VerticalLayout {
+                spacing: 10px;
+                VerticalLayout {
+                    spacing: 5px;
+                    Text { text: "Base URL"; color: Palette.foreground; font-weight: 600; }
+                    LineEdit {
+                        text <=> root.base-url;
+                        enabled: !root.busy;
+                        placeholder-text: "https://api.a6api.com";
+                    }
+                }
+                VerticalLayout {
+                    spacing: 5px;
+                    Text { text: "Model ID"; color: Palette.foreground; font-weight: 600; }
+                    LineEdit {
+                        text <=> root.model-id;
+                        enabled: !root.busy;
+                        placeholder-text: "gpt-image-2";
+                    }
+                }
+            }
+
+            if !root.compact: HorizontalLayout {
+                spacing: 14px;
+                LabeledChoice {
+                    label: "Default dimensions";
+                    choices: [
+                        "auto", "1024x1024", "1536x1024", "1024x1536",
+                        "2048x2048", "2048x1152", "1152x2048",
+                        "2560x1440", "1440x2560", "3840x2160", "2160x3840"
+                    ];
+                    value <=> root.default-size;
+                    enabled: !root.busy;
+                }
+                LabeledChoice {
+                    label: "Default quality";
+                    choices: ["auto", "low", "medium", "high"];
+                    value <=> root.default-quality;
+                    enabled: !root.busy;
+                }
+                LabeledChoice {
+                    label: "Default format";
+                    choices: ["PNG", "WebP", "JPEG"];
+                    value <=> root.default-format;
+                    enabled: !root.busy;
+                }
+            }
+
+            if root.compact: VerticalLayout {
+                spacing: 9px;
+                LabeledChoice {
+                    label: "Default dimensions";
+                    choices: [
+                        "auto", "1024x1024", "1536x1024", "1024x1536",
+                        "2048x2048", "2048x1152", "1152x2048",
+                        "2560x1440", "1440x2560", "3840x2160", "2160x3840"
+                    ];
+                    value <=> root.default-size;
+                    enabled: !root.busy;
+                }
+                LabeledChoice {
+                    label: "Default quality";
+                    choices: ["auto", "low", "medium", "high"];
+                    value <=> root.default-quality;
+                    enabled: !root.busy;
+                }
+                LabeledChoice {
+                    label: "Default format";
+                    choices: ["PNG", "WebP", "JPEG"];
+                    value <=> root.default-format;
+                    enabled: !root.busy;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Default output directory";
+                    color: Palette.foreground;
+                    font-weight: 600;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    LineEdit {
+                        text <=> root.output-directory;
+                        enabled: !root.busy;
+                        placeholder-text: "/absolute/path/to/outputs";
+                    }
+                    Button {
+                        text: "Choose…";
+                        enabled: !root.busy;
+                        clicked => { root.choose-output-directory(); }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 14px;
+                VerticalLayout {
+                    width: 260px;
+                    spacing: 5px;
+                    Text {
+                        text: "Request timeout (seconds)";
+                        color: Palette.foreground;
+                        font-weight: 600;
+                    }
+                    SpinBox {
+                        value <=> root.request-timeout;
+                        minimum: 10;
+                        maximum: 1800;
+                        enabled: !root.busy;
+                    }
+                }
+                CheckBox {
+                    text: "Retain local generation history";
+                    checked <=> root.retain-history;
+                    enabled: !root.busy;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            Rectangle {
+                height: 188px;
+                border-width: 1px;
+                border-color: Palette.border;
+                border-radius: 6px;
+                background: Palette.background.transparentize(0.12);
+
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 9px;
+                    Text {
+                        text: "Secure API key";
+                        color: Palette.foreground;
+                        font-weight: 650;
+                    }
+                    Text {
+                        text: "Active source: " + root.api-key-source
+                            + (root.api-key-mask == "" ? "" : "  ·  " + root.api-key-mask);
+                        color: Palette.foreground;
+                        opacity: 0.78;
+                    }
+                    LineEdit {
+                        text <=> root.api-key-entry;
+                        input-type: password;
+                        enabled: !root.busy;
+                        placeholder-text: "Enter a key to store in Secret Service / KWallet";
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button {
+                            text: "Store in system keyring";
+                            enabled: !root.busy && root.api-key-entry != "";
+                            clicked => { root.store-api-key(); }
+                        }
+                        Button {
+                            text: "Forget stored key";
+                            enabled: !root.busy;
+                            clicked => { root.forget-api-key(); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+            }
+
+            if root.override-note != "": Text {
+                text: root.override-note;
+                color: Palette.foreground;
+                opacity: 0.72;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                Button {
+                    text: "Save and apply settings";
+                    enabled: !root.busy;
+                    clicked => { root.save-settings(); }
+                }
+                if root.busy: Spinner { width: 24px; height: 24px; }
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            if root.status-text != "": Rectangle {
+                height: 58px;
+                border-width: 1px;
+                border-color: Palette.border;
+                border-radius: 5px;
+                background: Palette.background.transparentize(0.12);
+                Text {
+                    x: 9px;
+                    y: 6px;
+                    width: parent.width - 18px;
+                    height: parent.height - 12px;
+                    text: root.status-text;
+                    color: Palette.foreground;
+                    wrap: word-wrap;
+                    overflow: elide;
                 }
             }
         }
@@ -715,9 +1664,10 @@ export component AppWindow inherits Window {
     preferred-height: 820px;
     min-width: 500px;
     min-height: 400px;
-    background: Palette.background;
+    background: Palette.background.transparentize(0.18);
 
     property <bool> compact-layout: root.width < 900px;
+    in-out property <string> navigation-value: "A6 Image Studio · Create";
 
     in-out property <string> prompt: "A single solid blue circle centered on a plain white background";
     in-out property <string> size-value: "1024x1024";
@@ -757,6 +1707,53 @@ export component AppWindow inherits Window {
     in property <image> generated-image;
     in property <[RecentGenerationItem]> recent-items;
 
+    in-out property <string> history-search: "";
+    in property <[HistorySessionItem]> history-sessions;
+    in property <[HistoryGenerationItem]> history-generations;
+    in property <bool> history-has-selection: false;
+    in property <bool> history-file-available: false;
+    in property <image> history-preview;
+    in property <string> history-selected-timestamp: "";
+    in property <string> history-selected-session: "";
+    in property <string> history-selected-prompt: "";
+    in property <string> history-selected-model: "";
+    in property <string> history-selected-settings: "";
+    in property <string> history-selected-dimensions: "";
+    in property <string> history-selected-path: "";
+    in property <string> history-selected-request-id: "";
+    in property <string> history-status: "";
+
+    in-out property <string> error-search: "";
+    in property <[ErrorLogItem]> error-log-items;
+    in property <bool> error-has-selection: false;
+    in property <string> error-selected-timestamp: "";
+    in property <string> error-selected-session: "";
+    in property <string> error-selected-operation: "";
+    in property <string> error-selected-category: "";
+    in property <string> error-selected-prompt: "";
+    in property <string> error-selected-model: "";
+    in property <string> error-selected-endpoint: "";
+    in property <string> error-selected-request-id: "";
+    in property <string> error-selected-summary: "";
+    in property <string> error-selected-full-response: "";
+    in property <bool> error-selected-response-truncated: false;
+    in property <string> error-log-status: "";
+
+    in-out property <string> settings-base-url: "";
+    in-out property <string> settings-model-id: "";
+    in-out property <string> settings-default-size: "1024x1024";
+    in-out property <string> settings-default-quality: "low";
+    in-out property <string> settings-default-format: "PNG";
+    in-out property <string> settings-output-directory: "";
+    in-out property <int> settings-request-timeout: 300;
+    in-out property <bool> settings-retain-history: true;
+    in-out property <string> settings-api-key-entry: "";
+    in property <string> settings-api-key-source: "none";
+    in property <string> settings-api-key-mask: "";
+    in property <string> settings-override-note: "";
+    in property <string> settings-status: "";
+    in property <bool> settings-busy: false;
+
     callback test-connection();
     callback generate-image();
     callback cancel-operation();
@@ -767,6 +1764,20 @@ export component AppWindow inherits Window {
     callback regenerate();
     callback open-containing-folder();
     callback select-recent(int);
+    callback navigation-changed(string);
+    callback history-search-changed(string);
+    callback history-select-session(string);
+    callback history-select-generation(string);
+    callback history-use-selected();
+    callback history-open-selected-folder();
+    callback clear-history();
+    callback error-search-changed(string);
+    callback error-select-entry(string);
+    callback clear-errors();
+    callback save-settings();
+    callback choose-output-directory();
+    callback store-api-key();
+    callback forget-api-key();
 
     scroll := ScrollView {
         viewport-width: self.visible-width;
@@ -790,10 +1801,12 @@ export component AppWindow inherits Window {
                 status-details: root.result-details;
                 configured: root.configured;
                 busy: root.busy;
+                navigation-value <=> root.navigation-value;
                 test-connection => { root.test-connection(); }
+                navigation-changed(value) => { root.navigation-changed(value); }
             }
 
-            if !root.compact-layout: HorizontalLayout {
+            if root.navigation-value == "A6 Image Studio · Create" && !root.compact-layout: HorizontalLayout {
                 spacing: 14px;
                 GenerationPanel {
                     width: 430px;
@@ -842,14 +1855,14 @@ export component AppWindow inherits Window {
                     details-expanded <=> root.details-expanded;
                     save-as => { root.save-as(); }
                     copy-image => { root.copy-image(); }
-                    copy-prompt => { root.copy-prompt(root.prompt); }
+                    copy-prompt => { root.copy-prompt(root.result-prompt); }
                     regenerate => { root.regenerate(); }
                     open-containing-folder => { root.open-containing-folder(); }
                     select-recent(index) => { root.select-recent(index); }
                 }
             }
 
-            if root.compact-layout: VerticalLayout {
+            if root.navigation-value == "A6 Image Studio · Create" && root.compact-layout: VerticalLayout {
                 spacing: 14px;
                 GenerationPanel {
                     width: parent.width;
@@ -899,11 +1912,83 @@ export component AppWindow inherits Window {
                     details-expanded <=> root.details-expanded;
                     save-as => { root.save-as(); }
                     copy-image => { root.copy-image(); }
-                    copy-prompt => { root.copy-prompt(root.prompt); }
+                    copy-prompt => { root.copy-prompt(root.result-prompt); }
                     regenerate => { root.regenerate(); }
                     open-containing-folder => { root.open-containing-folder(); }
                     select-recent(index) => { root.select-recent(index); }
                 }
+            }
+
+            if root.navigation-value == "A6 Image Studio · History": HistoryPage {
+                width: parent.width;
+                compact: root.compact-layout;
+                sessions: root.history-sessions;
+                generations: root.history-generations;
+                search-text <=> root.history-search;
+                has-selection: root.history-has-selection;
+                selected-file-available: root.history-file-available;
+                selected-preview: root.history-preview;
+                selected-timestamp: root.history-selected-timestamp;
+                selected-session: root.history-selected-session;
+                selected-prompt: root.history-selected-prompt;
+                selected-model: root.history-selected-model;
+                selected-settings: root.history-selected-settings;
+                selected-dimensions: root.history-selected-dimensions;
+                selected-path: root.history-selected-path;
+                selected-request-id: root.history-selected-request-id;
+                status-text: root.history-status;
+                search-changed(value) => { root.history-search-changed(value); }
+                select-session(id) => { root.history-select-session(id); }
+                select-generation(id) => { root.history-select-generation(id); }
+                use-selected => { root.history-use-selected(); }
+                open-selected-folder => { root.history-open-selected-folder(); }
+                clear-history => { root.clear-history(); }
+            }
+
+            if root.navigation-value == "A6 Image Studio · Error log": ErrorLogPage {
+                width: parent.width;
+                compact: root.compact-layout;
+                entries: root.error-log-items;
+                search-text <=> root.error-search;
+                has-selection: root.error-has-selection;
+                selected-timestamp: root.error-selected-timestamp;
+                selected-session: root.error-selected-session;
+                selected-operation: root.error-selected-operation;
+                selected-category: root.error-selected-category;
+                selected-prompt: root.error-selected-prompt;
+                selected-model: root.error-selected-model;
+                selected-endpoint: root.error-selected-endpoint;
+                selected-request-id: root.error-selected-request-id;
+                selected-summary: root.error-selected-summary;
+                selected-full-response: root.error-selected-full-response;
+                selected-response-truncated: root.error-selected-response-truncated;
+                status-text: root.error-log-status;
+                search-changed(value) => { root.error-search-changed(value); }
+                select-entry(id) => { root.error-select-entry(id); }
+                clear-errors => { root.clear-errors(); }
+            }
+
+            if root.navigation-value == "A6 Image Studio · Settings": SettingsPage {
+                width: parent.width;
+                compact: root.compact-layout;
+                base-url <=> root.settings-base-url;
+                model-id <=> root.settings-model-id;
+                default-size <=> root.settings-default-size;
+                default-quality <=> root.settings-default-quality;
+                default-format <=> root.settings-default-format;
+                output-directory <=> root.settings-output-directory;
+                request-timeout <=> root.settings-request-timeout;
+                retain-history <=> root.settings-retain-history;
+                api-key-entry <=> root.settings-api-key-entry;
+                api-key-source: root.settings-api-key-source;
+                api-key-mask: root.settings-api-key-mask;
+                override-note: root.settings-override-note;
+                status-text: root.settings-status;
+                busy: root.settings-busy;
+                save-settings => { root.save-settings(); }
+                choose-output-directory => { root.choose-output-directory(); }
+                store-api-key => { root.store-api-key(); }
+                forget-api-key => { root.forget-api-key(); }
             }
         }
     }

@@ -16,10 +16,9 @@ use super::types::{
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_RESPONSE_BYTES: usize = 80 * 1024 * 1024;
-const MAX_ERROR_BODY_BYTES: usize = 16 * 1024;
-const MAX_ERROR_BODY_CHARS: usize = 4_096;
+const MAX_ERROR_BODY_BYTES: usize = 1024 * 1024;
+const MAX_ERROR_SUMMARY_CHARS: usize = 4_096;
 
 #[derive(Clone, Debug)]
 pub struct ApiClient {
@@ -31,7 +30,7 @@ impl ApiClient {
     pub fn new(config: Config) -> Result<Self, ApiError> {
         let http = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
+            .timeout(config.request_timeout())
             .user_agent(concat!("a6-image-studio/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(classify_transport)?;
@@ -123,11 +122,11 @@ impl ApiClient {
     async fn http_error(&self, response: Response, model_list: bool) -> ApiError {
         let status = response.status();
         let metadata = response_metadata(response.headers());
-        let raw_body = read_error_body(response).await;
+        let (raw_body, body_truncated) = read_error_body(response).await;
         let body = sanitize_body(&raw_body, self.config.api_key().expose());
         let message = structured_error_message(&raw_body)
-            .map(|message| sanitize_body(&message, self.config.api_key().expose()))
-            .unwrap_or_else(|| body.clone());
+            .map(|message| error_summary(&sanitize_body(&message, self.config.api_key().expose())))
+            .unwrap_or_else(|| error_summary(&body));
 
         if model_list
             && matches!(
@@ -140,6 +139,8 @@ impl ApiClient {
             return ApiError::UnsupportedEndpoint {
                 status,
                 message,
+                body,
+                body_truncated,
                 metadata: Box::new(metadata),
             };
         }
@@ -155,6 +156,7 @@ impl ApiClient {
             kind,
             message,
             body,
+            body_truncated,
             metadata: Box::new(metadata),
         }
     }
@@ -229,30 +231,41 @@ async fn read_limited_body(response: Response) -> Result<Vec<u8>, ApiError> {
     Ok(bytes.to_vec())
 }
 
-async fn read_error_body(mut response: Response) -> String {
+async fn read_error_body(mut response: Response) -> (String, bool) {
     let mut body = Vec::with_capacity(
         response
             .content_length()
             .unwrap_or(0)
             .min(MAX_ERROR_BODY_BYTES as u64) as usize,
     );
+    let mut truncated = response
+        .content_length()
+        .is_some_and(|length| length > MAX_ERROR_BODY_BYTES as u64);
     loop {
         match response.chunk().await {
             Ok(Some(chunk)) => {
                 let remaining = MAX_ERROR_BODY_BYTES.saturating_sub(body.len());
                 body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
-                if chunk.len() >= remaining {
+                if chunk.len() > remaining {
+                    truncated = true;
+                    break;
+                }
+                if remaining == 0 {
+                    truncated = true;
                     break;
                 }
             }
             Ok(None) => break,
             Err(error) if body.is_empty() => {
-                return format!("unable to read error response body: {error}");
+                return (
+                    format!("unable to read error response body: {error}"),
+                    false,
+                );
             }
             Err(_) => break,
         }
     }
-    String::from_utf8_lossy(&body).into_owned()
+    (String::from_utf8_lossy(&body).into_owned(), truncated)
 }
 
 fn response_metadata(headers: &HeaderMap) -> ResponseMetadata {
@@ -297,12 +310,15 @@ fn structured_error_message(body: &str) -> Option<String> {
 
 fn sanitize_body(body: &str, api_key: &str) -> String {
     let redacted = body.replace(api_key, "[REDACTED]");
-    let cleaned: String = redacted
+    redacted
         .chars()
         .filter(|character| !character.is_control() || matches!(character, '\n' | '\r' | '\t'))
-        .take(MAX_ERROR_BODY_CHARS)
-        .collect();
-    if redacted.chars().count() > MAX_ERROR_BODY_CHARS {
+        .collect()
+}
+
+fn error_summary(body: &str) -> String {
+    let cleaned: String = body.chars().take(MAX_ERROR_SUMMARY_CHARS).collect();
+    if body.chars().count() > MAX_ERROR_SUMMARY_CHARS {
         format!("{cleaned}…")
     } else {
         cleaned

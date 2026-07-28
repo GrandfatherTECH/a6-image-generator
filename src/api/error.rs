@@ -57,6 +57,8 @@ pub enum ApiError {
     UnsupportedEndpoint {
         status: StatusCode,
         message: String,
+        body: String,
+        body_truncated: bool,
         metadata: Box<ResponseMetadata>,
     },
     #[error("HTTP {status}: {message}")]
@@ -65,6 +67,7 @@ pub enum ApiError {
         kind: HttpFailure,
         message: String,
         body: String,
+        body_truncated: bool,
         metadata: Box<ResponseMetadata>,
     },
     #[error("invalid JSON response: {message}; body: {body}")]
@@ -104,6 +107,25 @@ impl ApiError {
             Self::UnsupportedEndpoint { metadata, .. } | Self::Http { metadata, .. } => {
                 Some(metadata.as_ref())
             }
+            _ => None,
+        }
+    }
+
+    /// Returns the sanitized provider response body for non-successful HTTP
+    /// responses. Successful image payloads, including Base64 data, are never
+    /// exposed through this method.
+    pub fn full_response(&self) -> Option<(&str, bool)> {
+        match self {
+            Self::UnsupportedEndpoint {
+                body,
+                body_truncated,
+                ..
+            }
+            | Self::Http {
+                body,
+                body_truncated,
+                ..
+            } => Some((body, *body_truncated)),
             _ => None,
         }
     }

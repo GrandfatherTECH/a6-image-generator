@@ -401,9 +401,14 @@ async fn preserves_non_json_api_error_body_and_redacts_key() {
     let _requests = finish_server(server).await;
 
     match error {
-        ApiError::Http { body, .. } => {
+        ApiError::Http {
+            body,
+            body_truncated,
+            ..
+        } => {
             assert!(body.contains("[REDACTED]"));
             assert!(!body.contains("test-secret-key"));
+            assert!(!body_truncated);
         }
         other => panic!("unexpected error: {other}"),
     }

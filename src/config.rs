@@ -1,17 +1,19 @@
 use std::env;
 use std::fmt;
+use std::time::Duration;
 
 use thiserror::Error;
 use url::Url;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.a6api.com";
 pub const DEFAULT_IMAGE_MODEL: &str = "gpt-image-2";
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone)]
 pub struct ApiKey(String);
 
 impl ApiKey {
-    fn new(value: impl Into<String>) -> Result<Self, ConfigError> {
+    pub(crate) fn from_secret(value: impl Into<String>) -> Result<Self, ConfigError> {
         let value = value.into();
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -51,6 +53,7 @@ pub struct Config {
     api_key: ApiKey,
     base_url: Url,
     model: String,
+    request_timeout: Duration,
 }
 
 impl Config {
@@ -72,19 +75,44 @@ impl Config {
         base_url: impl AsRef<str>,
         model: impl Into<String>,
     ) -> Result<Self, ConfigError> {
-        let api_key = ApiKey::new(api_key)?;
-        let base_url = normalize_base_url(base_url.as_ref())?;
+        Self::with_timeout(
+            ApiKey::from_secret(api_key)?,
+            base_url,
+            model,
+            DEFAULT_REQUEST_TIMEOUT,
+        )
+    }
+
+    pub fn with_timeout(
+        api_key: ApiKey,
+        base_url: impl AsRef<str>,
+        model: impl Into<String>,
+        request_timeout: Duration,
+    ) -> Result<Self, ConfigError> {
         let model = model.into();
-        let model = model.trim();
-        if model.is_empty() {
-            return Err(ConfigError::MissingModel);
+        let (base_url, model) = Self::validate_endpoint_and_model(base_url.as_ref(), &model)?;
+        if request_timeout.is_zero() {
+            return Err(ConfigError::InvalidRequestTimeout);
         }
 
         Ok(Self {
             api_key,
             base_url,
-            model: model.to_owned(),
+            model,
+            request_timeout,
         })
+    }
+
+    pub fn validate_endpoint_and_model(
+        base_url: &str,
+        model: &str,
+    ) -> Result<(Url, String), ConfigError> {
+        let base_url = normalize_base_url(base_url)?;
+        let model = model.trim();
+        if model.is_empty() {
+            return Err(ConfigError::MissingModel);
+        }
+        Ok((base_url, model.to_owned()))
     }
 
     pub fn api_key(&self) -> &ApiKey {
@@ -102,6 +130,10 @@ impl Config {
     pub fn model(&self) -> &str {
         &self.model
     }
+
+    pub fn request_timeout(&self) -> Duration {
+        self.request_timeout
+    }
 }
 
 impl fmt::Debug for Config {
@@ -111,6 +143,7 @@ impl fmt::Debug for Config {
             .field("api_key", &self.api_key)
             .field("base_url", &self.sanitized_base_url())
             .field("model", &self.model)
+            .field("request_timeout", &self.request_timeout)
             .finish()
     }
 }
@@ -123,6 +156,8 @@ pub enum ConfigError {
     NonUnicodeEnvironment(&'static str),
     #[error("A6API_IMAGE_MODEL must not be empty")]
     MissingModel,
+    #[error("request timeout must be greater than zero")]
+    InvalidRequestTimeout,
     #[error("invalid A6API_BASE_URL: {0}")]
     InvalidBaseUrl(String),
 }
@@ -191,7 +226,7 @@ mod tests {
 
     #[test]
     fn masks_api_keys_without_revealing_the_complete_value() {
-        let key = ApiKey::new("sk-1234567890abcd").expect("test key should be valid");
+        let key = ApiKey::from_secret("sk-1234567890abcd").expect("test key should be valid");
 
         assert_eq!(key.masked(), "sk-…abcd");
         assert!(!format!("{key:?}").contains("1234567890abcd"));
@@ -199,7 +234,7 @@ mod tests {
 
     #[test]
     fn short_api_keys_are_not_disclosed() {
-        let key = ApiKey::new("abcd").expect("test key should be valid");
+        let key = ApiKey::from_secret("abcd").expect("test key should be valid");
 
         assert_eq!(key.masked(), "…");
     }
@@ -210,5 +245,18 @@ mod tests {
             .expect_err("credentials in the URL must be rejected");
 
         assert!(error.to_string().contains("embedded credentials"));
+    }
+
+    #[test]
+    fn preserves_a_custom_request_timeout() {
+        let config = Config::with_timeout(
+            ApiKey::from_secret("secret").expect("valid key"),
+            "https://example.com",
+            "model",
+            Duration::from_secs(42),
+        )
+        .expect("configuration should be valid");
+
+        assert_eq!(config.request_timeout(), Duration::from_secs(42));
     }
 }

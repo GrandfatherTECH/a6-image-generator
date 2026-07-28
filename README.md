@@ -1,6 +1,6 @@
 # A6 Image Studio
 
-A6 Image Studio is a Linux desktop and command-line image-generation client for the A6API OpenAI-compatible gateway. The project is being built in reviewable phases. Phase 4 adds the polished, KDE-oriented desktop experience and Linux desktop identity to the architecture established in earlier phases.
+A6 Image Studio is a Linux desktop and command-line image-generation client for the A6API OpenAI-compatible gateway. The project is being built in reviewable phases. Phase 5 adds secure settings, optional persistent session history, and searchable diagnostics to the polished Linux desktop experience established in earlier phases.
 
 ## Current capabilities
 
@@ -9,16 +9,19 @@ A6 Image Studio is a Linux desktop and command-line image-generation client for 
 - Make one explicitly confirmed, billable `gpt-image-2` smoke generation.
 - Accept either Base64 or URL image responses, validate them, convert desktop output to the selected PNG/WebP/JPEG format, and store it under the XDG data directory.
 - Capture request ID, retry, and rate-limit response headers when present.
-- Launch a responsive, vertically scrollable Slint desktop window that follows the system light/dark palette and prefers Winit on Wayland or X11, with Qt as a startup fallback.
+- Launch a responsive, vertically scrollable, translucent Slint desktop window that follows the system light/dark palette and prefers Winit on Wayland or X11, with Qt as a startup fallback.
 - Use the documented `gpt-image-2` dimension presets or any custom valid dimensions, plus quality, background, and PNG/WebP/JPEG controls.
 - Omit individual optional request fields through compatibility settings when a gateway rejects them.
 - Cancel an active GUI request and preview a generated image without decoding it on the UI thread.
 - Track idle, connecting, generating, success, cancelled, and error states explicitly.
 - Reject stale async completions and atomically commit generated output files.
 - Save a generated result under another name, copy the image or prompt, regenerate the exact request, and open its containing folder.
-- Display request duration, dimensions, encoded file size, format, path, and request ID.
-- Compare every explicitly requested size with the decoded response dimensions and show a prominent warning when a gateway returns a different raster.
-- Switch among the six most recent results from the current session without persisting history.
+- Display request duration, requested and actual dimensions, encoded file size, format, path, and request ID.
+- Report proportional provider-adjusted output sizes without treating them as failures, while still warning when the returned aspect ratio changes.
+- Switch among the six most recent results from the current session.
+- Persist ordinary preferences under XDG configuration and optionally store the API key in Secret Service/KWallet; environment credentials always take precedence.
+- Keep searchable generation history grouped by application session, restore old prompts/settings even when an image file has been moved or deleted, and clear metadata without deleting generated images.
+- Keep a separate searchable error log with timestamps, session/request context, and the sanitized provider response body (up to a 1 MiB safety limit).
 - Integrate with Linux desktops through a stable XDG app ID, desktop entry, AppStream metadata, freedesktop icon set, XDG paths, and portal-backed Save As.
 
 ## Quick start
@@ -55,12 +58,12 @@ See the [user guide](docs/USER_GUIDE.md) for configuration, desktop controls, an
 
 See the official [OpenAI image-generation guide](https://developers.openai.com/api/docs/guides/image-generation) and [`gpt-image-2` model page](https://developers.openai.com/api/docs/models/gpt-image-2).
 
-An OpenAI-compatible gateway can still return a raster that does not honor the
-sent `size`. A6 Image Studio always reports the decoded file's actual dimensions
-and compares them with the explicit request. A mismatch is shown prominently;
-the paid response is preserved unchanged instead of being silently stretched or
-upscaled.
+An OpenAI-compatible gateway can return a smaller raster while preserving the
+requested aspect ratio. A6 Image Studio reports that as a provider-adjusted size,
+shows both requested and decoded dimensions, and preserves the paid response
+unchanged. A changed aspect ratio remains a prominent warning. The client never
+silently stretches or artificially upscales output.
 
 ## Project status
 
-Phase 4 is implemented. Secure in-app credential storage and persistent generation history remain intentionally deferred to Phase 5; Linux package assembly remains a later phase.
+Phase 5 is implemented. Linux package assembly remains intentionally deferred to the next phase.

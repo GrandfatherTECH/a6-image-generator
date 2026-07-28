@@ -92,8 +92,11 @@ pub(crate) async fn copy_prompt(prompt: String) -> Result<(), ResultActionError>
 pub(crate) async fn open_containing_folder(
     image: &GeneratedImage,
 ) -> Result<(), ResultActionError> {
-    let directory = image
-        .path()
+    open_containing_path(image.path()).await
+}
+
+pub(crate) async fn open_containing_path(path: &Path) -> Result<(), ResultActionError> {
+    let directory = path
         .parent()
         .ok_or(ResultActionError::MissingContainingFolder)?
         .to_owned();
@@ -103,6 +106,17 @@ pub(crate) async fn open_containing_folder(
             action: "waiting for the folder opener",
             source: std::io::Error::other(source),
         })?
+}
+
+pub(crate) async fn choose_output_directory() -> Option<PathBuf> {
+    let mut dialog = rfd::AsyncFileDialog::new().set_title("Choose default output directory");
+    if let Ok(paths) = AppPaths::discover() {
+        dialog = dialog.set_directory(paths.pictures_dir());
+    }
+    dialog
+        .pick_folder()
+        .await
+        .map(|handle| handle.path().to_owned())
 }
 
 fn normalized_destination(

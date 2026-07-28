@@ -5,6 +5,9 @@ pub mod app;
 pub mod config;
 pub mod domain;
 pub mod generation;
+pub mod history;
+pub mod preferences;
+pub mod secrets;
 pub mod storage;
 pub mod xdg;
 

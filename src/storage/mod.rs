@@ -67,6 +67,13 @@ pub struct SavedImagePreview {
     pub preview_rgba: Vec<u8>,
 }
 
+#[derive(Debug)]
+pub struct LoadedImagePreview {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("an XDG data directory could not be determined")]
@@ -103,9 +110,24 @@ pub async fn save_with_preview(
     bytes: Vec<u8>,
     output_format: OutputFormat,
 ) -> Result<SavedImagePreview, StorageError> {
+    let output_directory = output_directory()?;
+    save_with_preview_in(bytes, output_format, &output_directory).await
+}
+
+pub async fn save_with_preview_in(
+    bytes: Vec<u8>,
+    output_format: OutputFormat,
+    output_directory: &Path,
+) -> Result<SavedImagePreview, StorageError> {
     let prepared =
         tokio::task::spawn_blocking(move || prepare_image(&bytes, output_format, true)).await??;
-    let path = write_output(&prepared.encoded, "generated", output_format).await?;
+    let path = write_output_in(
+        output_directory,
+        &prepared.encoded,
+        "generated",
+        output_format,
+    )
+    .await?;
 
     Ok(SavedImagePreview {
         path,
@@ -134,6 +156,26 @@ pub async fn copy_atomic(source: &Path, destination: &Path) -> Result<(), Storag
             source: source_error,
         })?;
     write_atomic(destination, &bytes).await
+}
+
+pub async fn load_preview(path: &Path) -> Result<LoadedImagePreview, StorageError> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let bytes = std::fs::read(&path).map_err(|source| StorageError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let source_format = image::guess_format(&bytes)?;
+        let image = image::load_from_memory_with_format(&bytes, source_format)?;
+        let (width, height) = image.dimensions();
+        let preview = prepare_preview(&image, width, height);
+        Ok(LoadedImagePreview {
+            width: preview.width,
+            height: preview.height,
+            rgba: preview.rgba,
+        })
+    })
+    .await?
 }
 
 async fn write_output(

@@ -1,6 +1,6 @@
 # User Guide
 
-This guide documents the Phase 4 Slint desktop interface and the permanent command-line interface.
+This guide documents the Phase 5 Slint desktop interface and the permanent command-line interface.
 
 ## Requirements
 
@@ -11,13 +11,20 @@ This guide documents the Phase 4 Slint desktop interface and the permanent comma
 
 ## Configuration
 
-A6 Image Studio reads configuration from environment variables:
+A6 Image Studio can read connection configuration from environment variables and ordinary desktop preferences from its Settings page:
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `A6API_KEY` | Yes | None | Bearer token used for API requests. |
-| `A6API_BASE_URL` | No | `https://api.a6api.com` | OpenAI-compatible API root. Both roots with and without `/v1` are accepted. |
-| `A6API_IMAGE_MODEL` | No | `gpt-image-2` | Image model identifier. |
+| `A6API_KEY` | No* | None | Bearer token used for API requests. It takes precedence over a key stored in the system keyring. |
+| `A6API_BASE_URL` | No | saved setting or `https://api.a6api.com` | OpenAI-compatible API root. Both roots with and without `/v1` are accepted. |
+| `A6API_IMAGE_MODEL` | No | saved setting or `gpt-image-2` | Image model identifier. |
+
+`*` A key must be available either through `A6API_KEY` or through the optional system-keyring entry before connection or generation can run.
+
+The keyring and saved ordinary preferences are desktop features. The permanent
+`check` and `smoke-generate` CLI commands intentionally remain deterministic
+environment-driven tools and therefore require `A6API_KEY`; their base URL and
+model also come from the environment variables in this table.
 
 Trailing slashes in the base URL are removed. The URL must use HTTP or HTTPS, include a host, and must not contain embedded credentials, a query, or a fragment. The application never prints the complete API key; diagnostics show only a masked form.
 
@@ -31,7 +38,24 @@ export A6API_IMAGE_MODEL='gpt-image-2'
 
 Shell exports last only for the current shell unless added to a secure environment setup. Do not put API keys in the repository or ordinary configuration files.
 
-Configuration is read when the process starts. Restart the application after changing an environment variable. Phase 4 does not store credentials or offer an in-app key editor.
+Environment variables are read when the process starts. Restart the application after changing one. `A6API_BASE_URL` and `A6API_IMAGE_MODEL` visibly override their saved counterparts for that process, while `A6API_KEY` always overrides a stored key.
+
+The Settings page stores only non-secret preferences in:
+
+```text
+${XDG_CONFIG_HOME:-$HOME/.config}/a6-image-studio/settings.json
+```
+
+The page controls the base URL, model ID, default dimensions/quality/format, output directory, request timeout from 10 to 1800 seconds, and optional generation-history retention. The output directory must be an absolute path.
+
+### Secure API-key storage
+
+Entering a key and choosing `Store in system keyring` stores it through the Linux Secret Service API, normally backed by KWallet on KDE or GNOME Keyring on GNOME. The Settings page always identifies the active source as `environment`, `system keyring`, or `none` and displays only a masked key.
+
+- The application never writes an API key to `settings.json`, `history.json`, `errors.json`, TOML, logs, or UI history.
+- Existing environment credentials are never silently copied into the keyring.
+- Storing a key while `A6API_KEY` is set does not replace the active environment key; it becomes available after the environment variable is removed and the application is restarted.
+- `Forget stored key` removes only the system-keyring entry. It cannot remove a key supplied by the process environment.
 
 ## Desktop interface
 
@@ -47,7 +71,14 @@ The explicit equivalent is:
 cargo run -- gui
 ```
 
-The compact header displays the normalized endpoint, masked API key, configured model, and current operation status. It never displays the full key. The interface follows the system light/dark palette and font. Wide windows place the prompt/settings panel beside a large preview canvas; narrower windows stack the same panels vertically. The complete window remains in a vertical scroll view, so every control is reachable at the minimum window size.
+The compact header displays the normalized endpoint, masked API key, configured model, and current operation status. It never displays the full key. Use the app-name dropdown at the upper left to switch between:
+
+- `Create`
+- `History`
+- `Error log`
+- `Settings`
+
+The interface follows the system light/dark palette and font. Wide Create windows place the prompt/settings panel beside a large preview canvas; narrower windows stack the same panels vertically. History and Error log likewise change from columns to vertically scrollable cards, and Settings stacks fields that would otherwise become cramped. The complete window remains in a vertical scroll view, so every control is reachable at the minimum window size.
 
 `Test connection` calls the models endpoint and reports its HTTP status and whether the configured model is listed. A model missing from that list does not necessarily mean image generation is unavailable.
 
@@ -97,18 +128,19 @@ string in the JSON `size` field. After the response is decoded, the client
 compares the real raster dimensions with the request:
 
 - A matching result is accepted normally.
-- A mismatch is saved at the dimensions actually returned by the gateway and
-  shown with a prominent `Size mismatch` warning.
+- A smaller or otherwise adjusted raster with effectively the same aspect ratio
+  is reported as a normal provider adjustment.
+- A returned raster with a materially different aspect ratio is saved but shown
+  with a prominent warning.
 - The request details distinguish the requested dimensions from the actual
   dimensions displayed above the preview.
 - The client never silently stretches, crops, or artificially upscales a paid
   response.
 
-For example, if a gateway returns `1402×1122` for a sent `3840x2160` request,
-the saved file remains `1402×1122` and the warning reports both values. This is
-a gateway/model compatibility failure rather than preview downscaling: display
-previews are separately bounded in memory, but the durable file retains the
-decoded response dimensions.
+For example, `1672×941` returned for a `3840x2160` request is treated as a
+provider-adjusted 16:9 result, while `1402×1122` is called out because its aspect
+ratio differs. This is not preview downscaling: display previews are separately
+bounded in memory, but the durable file retains the decoded response dimensions.
 
 ### Compatibility settings
 
@@ -125,9 +157,9 @@ The corresponding normal control is hidden while its parameter is disabled. The 
 
 ### Generated result and actions
 
-Successful output is validated, atomically saved, and shown in the large preview canvas. Up to six successful images are retained as an in-memory `Recent this session` strip; selecting a thumbnail changes the preview and metadata, and makes file actions and Regenerate target that result. This strip is cleared when the program exits and does not yet create persistent history.
+Successful output is validated, atomically saved, and shown in the large preview canvas. Up to six successful images are retained in the in-memory `Recent this session` strip; selecting a thumbnail changes the preview and metadata, and makes file actions and Regenerate target that result.
 
-Expand `Request details` to inspect the successful prompt and sent/omitted options together with request duration, actual image dimensions, encoded file size, output format, exact path, and request ID when supplied. The details region has bounded rows and clipping so long prompts and paths cannot draw beyond its border.
+`Request details` is grouped with the other actions in a padded control well below the preview, so it remains visible without colliding with the lower card edge. Expand it to inspect the successful prompt and sent/omitted options together with request duration, actual image dimensions, encoded file size, output format, exact path, and request ID when supplied. The details region has bounded rows and clipping so long prompts and paths cannot draw beyond its border.
 
 - `Save As…` opens the desktop portal file dialog and writes an atomic copy. Keep the selected format's extension.
 - `Copy image` sends the encoded file to the desktop clipboard. On Linux this uses `wl-copy` on Wayland or `xclip` on X11 when available.
@@ -142,6 +174,40 @@ Generated desktop files use this location and filename form:
 ```text
 ${XDG_DATA_HOME:-$HOME/.local/share}/a6-image-studio/outputs/generated-<timestamp>-<process>-<sequence>.<png|webp|jpg>
 ```
+
+The default directory can be changed in Settings. Changing it affects subsequent desktop generations; existing history entries continue to reference the path at which each image was originally saved.
+
+## Persistent generation history
+
+When `Retain local generation history` is enabled, every successful desktop generation is recorded in the History section and grouped by application session. Each entry contains only:
+
+- timestamp and session identifier;
+- output path;
+- prompt and model;
+- generation/compatibility settings;
+- decoded dimensions;
+- request ID when supplied.
+
+Image bytes and Base64 provider payloads are never duplicated into history. Search matches prompts, models, paths, request IDs, timestamps, and session IDs.
+
+Selecting an entry loads a bounded preview from the original output path. `Load in Create` restores its prompt and settings. If the image was moved or deleted, the interface explains that the file is unavailable, disables file-dependent actions, and still allows the cached prompt/settings to be restored. `Clear history` removes metadata only; it deliberately does not delete generated image files.
+
+Disabling retention stops new successful generations from being appended. Existing metadata remains available until explicitly cleared.
+
+## Error log
+
+The separate Error log records connection, generation, validation, and other operational failures with:
+
+- UTC timestamp and application session;
+- operation and error category;
+- prompt when one was involved;
+- model, sanitized endpoint, and request ID;
+- a concise summary;
+- the complete captured provider response body, sanitized and bounded to a 1 MiB safety limit.
+
+Search covers all of those fields, including provider response text. The detail pane keeps each response bound to its originating session and request context. It explicitly marks a response that reached the safety limit. Transport failures without an HTTP response show that no body was available.
+
+Successful image responses and Base64 image payloads are never copied into the error log. The active API key is redacted before persistence. `Clear error log` removes the local diagnostic metadata.
 
 ## CLI commands
 
@@ -191,11 +257,13 @@ RUST_LOG=info cargo run -- check
 
 Exit status `0` means success, `1` means configuration/network/API/output failure, and `2` means the billable smoke request was not confirmed. CLI syntax errors also use Clap's standard nonzero status.
 
-Authentication headers are never logged. Error responses are parsed when structured JSON is available; otherwise a bounded, control-character-cleaned portion is shown with the configured key redacted.
+Authentication headers are never logged. Error responses are parsed when structured JSON is available. A short sanitized summary is used in transient status messages, while the Error log retains the sanitized captured response body up to its 1 MiB safety limit.
 
 ## Desktop troubleshooting
 
-A6 Image Studio compiles Slint's Winit Wayland and X11 integrations plus the Qt backend. With no override, startup tries Winit first; Winit uses the active Wayland or X11 display. Qt is attempted only if Winit cannot initialize. Force the Winit software renderer with:
+A6 Image Studio compiles Slint's Winit Wayland and X11 integrations plus the Qt backend. With no override, startup tries Winit first; Winit uses the active Wayland or X11 display. Qt is attempted only if Winit cannot initialize. The Winit window requests transparency and compositor blur. KDE Wayland can honor the blur request through KWin; unsupported compositors may show translucency without blur, and Winit does not currently implement this blur hint on X11. These differences do not affect generation.
+
+Force the Winit software renderer with:
 
 ```bash
 SLINT_BACKEND=winit-software cargo run
@@ -211,6 +279,8 @@ Any non-empty `SLINT_BACKEND` value is treated as an explicit override rather
 than being replaced by the automatic Winit-first policy.
 
 Run from a terminal with `RUST_LOG=info` to retain sanitized startup and transport diagnostics. A startup error about `A6API_KEY` means the variable was not exported into the environment of the launched process.
+
+If a stored key cannot be loaded, first confirm that the desktop Secret Service is running and the login keyring is unlocked. On KDE this normally means KWallet plus its Secret Service integration. The application continues in an explicit unconfigured state instead of copying or exposing credentials.
 
 On KDE Wayland, install `wl-clipboard` if `Copy image` or `Copy prompt` reports that clipboard support is unavailable. On an X11 session, install `xclip`. Clipboard commands receive only the image or prompt explicitly requested for copying; the API key is never passed to them.
 
@@ -232,7 +302,9 @@ The application resolves standard XDG locations:
 | --- | --- |
 | Generated output | `${XDG_DATA_HOME:-$HOME/.local/share}/a6-image-studio/outputs/` |
 | Save As starting directory | `${XDG_PICTURES_DIR:-$HOME/Pictures}` |
-| Future configuration | `${XDG_CONFIG_HOME:-$HOME/.config}/a6-image-studio/` |
-| Future cache data | `${XDG_CACHE_HOME:-$HOME/.cache}/a6-image-studio/` |
+| Ordinary settings | `${XDG_CONFIG_HOME:-$HOME/.config}/a6-image-studio/settings.json` |
+| Generation-history metadata | `${XDG_DATA_HOME:-$HOME/.local/share}/a6-image-studio/history.json` |
+| Error-log metadata | `${XDG_DATA_HOME:-$HOME/.local/share}/a6-image-studio/errors.json` |
+| Reserved cache directory | `${XDG_CACHE_HOME:-$HOME/.cache}/a6-image-studio/` |
 
-The configuration and cache paths are reserved for later phases; Phase 4 does not persist settings or history there.
+The API key is not stored at any filesystem location listed above. It remains in the environment or the desktop keyring.
