@@ -6,5 +6,6 @@ pub mod config;
 pub mod domain;
 pub mod generation;
 pub mod storage;
+pub mod xdg;
 
 slint::include_modules!();

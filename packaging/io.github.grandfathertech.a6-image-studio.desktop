@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=A6 Image Studio
+GenericName=Image Generator
+Comment=Generate and save images through A6API
+Exec=a6-image-studio gui
+Icon=io.github.grandfathertech.a6-image-studio
+Terminal=false
+Categories=Graphics;2DGraphics;
+Keywords=AI;Image;Generate;A6API;
+StartupNotify=true
+StartupWMClass=io.github.grandfathertech.a6-image-studio

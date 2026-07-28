@@ -1,8 +1,11 @@
+use std::fmt;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
+use slint::{
+    ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
+};
 use thiserror::Error;
 use tokio::runtime::{Builder, Handle, Runtime};
 use tokio::task::AbortHandle;
@@ -11,15 +14,32 @@ use super::actions;
 use super::state::{
     ApplicationState, ConnectionResult, OperationId, OperationKind, StateMachine, SuccessResult,
 };
-use crate::AppWindow;
 use crate::api::{ApiClient, ApiError, ImageGenerationRequest, ModelsCheck, ResponseMetadata};
 use crate::config::{Config, DEFAULT_BASE_URL, DEFAULT_IMAGE_MODEL};
 use crate::domain::{GeneratedImage, PersistedImage};
 use crate::generation::{
     CompatibilitySettings, GenerationInput, GenerationOptions, GenerationValidationError,
-    ImageBackground, ImageQuality, ImageSize, OutputFormat,
+    ImageBackground, ImageDimensions, ImageQuality, ImageSize, OutputFormat,
 };
 use crate::storage::{self, SavedImagePreview};
+use crate::xdg::APP_ID;
+use crate::{AppWindow, RecentGenerationItem};
+
+const MAX_RECENT_RESULTS: usize = 6;
+const CUSTOM_SIZE_LABEL: &str = "Custom…";
+const SIZE_PRESETS: &[&str] = &[
+    "auto",
+    "1024x1024",
+    "1536x1024",
+    "1024x1536",
+    "2048x2048",
+    "2048x1152",
+    "1152x2048",
+    "2560x1440",
+    "1440x2560",
+    "3840x2160",
+    "2160x3840",
+];
 
 #[derive(Debug, Error)]
 pub enum GuiError {
@@ -151,31 +171,86 @@ fn clear_finished_handle(coordinator: &mut OperationCoordinator, operation: Oper
     }
 }
 
+#[derive(Default)]
+struct ResultCollection {
+    items: Vec<GenerationResult>,
+    selected: Option<usize>,
+}
+
 #[derive(Clone, Default)]
 struct ResultStore {
-    latest: Arc<Mutex<Option<GeneratedImage>>>,
+    inner: Arc<Mutex<ResultCollection>>,
 }
 
 impl ResultStore {
-    fn latest(&self) -> Option<GeneratedImage> {
-        match self.latest.lock() {
-            Ok(latest) => latest.clone(),
+    fn selected(&self) -> Option<GenerationResult> {
+        match self.inner.lock() {
+            Ok(collection) => collection
+                .selected
+                .and_then(|index| collection.items.get(index))
+                .cloned(),
             Err(poisoned) => {
                 tracing::error!("result store lock was poisoned; recovering image");
-                poisoned.into_inner().clone()
+                let collection = poisoned.into_inner();
+                collection
+                    .selected
+                    .and_then(|index| collection.items.get(index))
+                    .cloned()
             }
         }
     }
 
-    fn replace(&self, image: GeneratedImage) {
-        match self.latest.lock() {
-            Ok(mut latest) => *latest = Some(image),
+    fn push(&self, result: GenerationResult) {
+        match self.inner.lock() {
+            Ok(mut collection) => push_result(&mut collection, result),
             Err(poisoned) => {
                 tracing::error!("result store lock was poisoned; replacing image");
-                *poisoned.into_inner() = Some(image);
+                push_result(&mut poisoned.into_inner(), result);
             }
         }
     }
+
+    fn select(&self, index: usize) -> Option<GenerationResult> {
+        match self.inner.lock() {
+            Ok(mut collection) => select_result(&mut collection, index),
+            Err(poisoned) => {
+                tracing::error!("result store lock was poisoned; selecting image");
+                select_result(&mut poisoned.into_inner(), index)
+            }
+        }
+    }
+
+    fn snapshot(&self) -> Vec<(GenerationResult, bool)> {
+        match self.inner.lock() {
+            Ok(collection) => result_snapshot(&collection),
+            Err(poisoned) => {
+                tracing::error!("result store lock was poisoned; recovering recent results");
+                result_snapshot(&poisoned.into_inner())
+            }
+        }
+    }
+}
+
+fn push_result(collection: &mut ResultCollection, result: GenerationResult) {
+    collection.items.insert(0, result);
+    collection.items.truncate(MAX_RECENT_RESULTS);
+    collection.selected = Some(0);
+}
+
+fn select_result(collection: &mut ResultCollection, index: usize) -> Option<GenerationResult> {
+    let result = collection.items.get(index)?.clone();
+    collection.selected = Some(index);
+    Some(result)
+}
+
+fn result_snapshot(collection: &ResultCollection) -> Vec<(GenerationResult, bool)> {
+    collection
+        .items
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, result)| (result, collection.selected == Some(index)))
+        .collect()
 }
 
 enum OperationResult {
@@ -183,6 +258,7 @@ enum OperationResult {
     Generation(GenerationResult),
 }
 
+#[derive(Clone)]
 struct GenerationResult {
     image: GeneratedImage,
     pixels: SharedPixelBuffer<Rgba8Pixel>,
@@ -191,6 +267,8 @@ struct GenerationResult {
 pub fn run() -> Result<(), GuiError> {
     let runtime = build_worker_runtime()?;
     with_runtime_context(&runtime, |runtime_handle| {
+        slint::BackendSelector::new().select()?;
+        slint::set_xdg_app_id(APP_ID)?;
         let ui = AppWindow::new()?;
         let (backend, initial_state) = load_backend(&ui);
         let operations = OperationControl::new(initial_state);
@@ -283,6 +361,7 @@ fn bind_callbacks(
     bind_connection_callback(ui, &runtime, &backend, &operations, &results);
     bind_generation_callbacks(ui, &runtime, &backend, &operations, &results);
     bind_result_actions(ui, &runtime, &results);
+    bind_dimension_callbacks(ui);
 
     ui.on_cancel_operation({
         let operations = operations.clone();
@@ -375,10 +454,10 @@ fn bind_generation_callbacks(
         let operations = operations.clone();
         let results = results.clone();
         move || {
-            let Some(image) = results.latest() else {
+            let Some(result) = results.selected() else {
                 return;
             };
-            let input = image.request().clone();
+            let input = result.image.request().clone();
             if let Some(ui) = ui_weak.upgrade() {
                 present_generation_input(&ui, &input);
             }
@@ -426,9 +505,10 @@ fn bind_result_actions(ui: &AppWindow, runtime: &Handle, results: &ResultStore) 
         let runtime = runtime.clone();
         let results = results.clone();
         move || {
-            let Some(image) = results.latest() else {
+            let Some(result) = results.selected() else {
                 return;
             };
+            let image = result.image;
             spawn_action(&runtime, &ui_weak, "Opening Save As…", async move {
                 match actions::save_as(&image).await? {
                     Some(path) => Ok(format!("Saved copy to {}", path.display())),
@@ -443,9 +523,10 @@ fn bind_result_actions(ui: &AppWindow, runtime: &Handle, results: &ResultStore) 
         let runtime = runtime.clone();
         let results = results.clone();
         move || {
-            let Some(image) = results.latest() else {
+            let Some(result) = results.selected() else {
                 return;
             };
+            let image = result.image;
             spawn_action(&runtime, &ui_weak, "Copying image…", async move {
                 actions::copy_image(&image).await?;
                 Ok("Image copied to clipboard".to_owned())
@@ -470,9 +551,10 @@ fn bind_result_actions(ui: &AppWindow, runtime: &Handle, results: &ResultStore) 
         let runtime = runtime.clone();
         let results = results.clone();
         move || {
-            let Some(image) = results.latest() else {
+            let Some(result) = results.selected() else {
                 return;
             };
+            let image = result.image;
             spawn_action(
                 &runtime,
                 &ui_weak,
@@ -484,6 +566,35 @@ fn bind_result_actions(ui: &AppWindow, runtime: &Handle, results: &ResultStore) 
             );
         }
     });
+
+    ui.on_select_recent({
+        let ui_weak = ui.as_weak();
+        let results = results.clone();
+        move |index| {
+            let Ok(index) = usize::try_from(index) else {
+                return;
+            };
+            let Some(result) = results.select(index) else {
+                return;
+            };
+            if let Some(ui) = ui_weak.upgrade() {
+                present_selected_result(&ui, &result);
+                present_recent_results(&ui, &results);
+            }
+        }
+    });
+}
+
+fn bind_dimension_callbacks(ui: &AppWindow) {
+    ui.on_custom_dimensions_changed({
+        let ui_weak = ui.as_weak();
+        move |width, height| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_dimension_status(dimension_status(width, height).into());
+            }
+        }
+    });
+    ui.set_dimension_status(dimension_status(ui.get_custom_width(), ui.get_custom_height()).into());
 }
 
 fn spawn_action<F>(
@@ -516,8 +627,15 @@ fn spawn_action<F>(
 }
 
 fn generation_input_from_ui(ui: &AppWindow) -> Result<GenerationInput, GenerationValidationError> {
+    let size = if ui.get_size_value().as_str() == CUSTOM_SIZE_LABEL {
+        let width = u32::try_from(ui.get_custom_width()).unwrap_or_default();
+        let height = u32::try_from(ui.get_custom_height()).unwrap_or_default();
+        ImageSize::dimensions(width, height)?
+    } else {
+        ui.get_size_value().as_str().parse::<ImageSize>()?
+    };
     let options = GenerationOptions {
-        size: ui.get_size_value().as_str().parse::<ImageSize>()?,
+        size,
         quality: ui.get_quality_value().as_str().parse::<ImageQuality>()?,
         background: ui
             .get_background_value()
@@ -540,7 +658,17 @@ fn generation_input_from_ui(ui: &AppWindow) -> Result<GenerationInput, Generatio
 fn present_generation_input(ui: &AppWindow, input: &GenerationInput) {
     let options = input.options();
     ui.set_prompt(input.prompt().into());
-    ui.set_size_value(options.size.to_string().into());
+    let size = options.size.to_string();
+    if SIZE_PRESETS.contains(&size.as_str()) {
+        ui.set_size_value(size.into());
+    } else if let Some(dimensions) = options.size.explicit_dimensions() {
+        ui.set_size_value(CUSTOM_SIZE_LABEL.into());
+        ui.set_custom_width(dimensions.width() as i32);
+        ui.set_custom_height(dimensions.height() as i32);
+        ui.set_dimension_status(
+            dimension_status(dimensions.width() as i32, dimensions.height() as i32).into(),
+        );
+    }
     ui.set_quality_value(options.quality.to_string().into());
     ui.set_background_value(options.background.to_string().into());
     ui.set_output_format_value(options.output_format.to_string().into());
@@ -560,12 +688,12 @@ async fn generate(
     let generated = backend.client.generate_image(&request).await?;
     let output_format = input.options().output_format;
     let saved = storage::save_with_preview(generated.bytes, output_format).await?;
-    let image = generated_image(saved, generated.metadata, started, input, output_format);
     let pixels = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-        image.preview_rgba(),
-        image.width(),
-        image.height(),
+        &saved.preview_rgba,
+        saved.preview_width,
+        saved.preview_height,
     );
+    let image = generated_image(saved, generated.metadata, started, input, output_format);
 
     Ok(OperationResult::Generation(GenerationResult {
         image,
@@ -586,7 +714,6 @@ fn generated_image(
             width: saved.width,
             height: saved.height,
             file_size: saved.file_size,
-            preview_rgba: saved.rgba,
             output_format,
         },
         started.elapsed(),
@@ -634,9 +761,12 @@ fn finish_operation(
         Ok(OperationResult::Generation(generated)) => {
             let success = SuccessResult::Generation(generated.image.clone());
             if let Some(state) = operations.succeed(operation, success) {
-                results.replace(generated.image);
+                results.push(generated);
                 present_state(&ui, &state);
-                ui.set_generated_image(Image::from_rgba8(generated.pixels));
+                if let Some(selected) = results.selected() {
+                    present_selected_result(&ui, &selected);
+                }
+                present_recent_results(&ui, &results);
             }
         }
         Err(error) => {
@@ -720,6 +850,8 @@ fn present_busy(ui: &AppWindow, status: &str) {
 
 fn present_generated_image(ui: &AppWindow, image: &GeneratedImage) {
     ui.set_has_result(true);
+    ui.set_result_prompt(image.request().prompt().into());
+    ui.set_result_settings(generation_settings_text(image.request().options()).into());
     ui.set_result_duration(format_duration(image.elapsed()).into());
     ui.set_result_dimensions(format!("{} × {}", image.width(), image.height()).into());
     ui.set_result_file_size(format_file_size(image.file_size()).into());
@@ -733,6 +865,69 @@ fn present_generated_image(ui: &AppWindow, image: &GeneratedImage) {
             .unwrap_or("Not provided")
             .into(),
     );
+}
+
+fn generation_settings_text(options: &GenerationOptions) -> String {
+    let compatibility = options.compatibility;
+    format!(
+        "Dimensions {}  ·  Quality {}  ·  Background {}  ·  API format {}",
+        request_parameter(compatibility.send_size, options.size),
+        request_parameter(compatibility.send_quality, options.quality),
+        request_parameter(compatibility.send_background, options.background),
+        request_parameter(compatibility.send_output_format, options.output_format),
+    )
+}
+
+fn request_parameter(enabled: bool, value: impl fmt::Display) -> String {
+    if enabled {
+        value.to_string()
+    } else {
+        "omitted".to_owned()
+    }
+}
+
+fn present_selected_result(ui: &AppWindow, result: &GenerationResult) {
+    present_generated_image(ui, &result.image);
+    ui.set_generated_image(Image::from_rgba8(result.pixels.clone()));
+}
+
+fn present_recent_results(ui: &AppWindow, results: &ResultStore) {
+    let recent = results
+        .snapshot()
+        .into_iter()
+        .map(|(result, selected)| RecentGenerationItem {
+            preview: Image::from_rgba8(result.pixels),
+            label: format!("{}×{}", result.image.width(), result.image.height()).into(),
+            selected,
+        })
+        .collect::<Vec<_>>();
+    ui.set_recent_items(ModelRc::new(VecModel::from(recent)));
+}
+
+fn dimension_status(width: i32, height: i32) -> String {
+    let width = u32::try_from(width).unwrap_or_default();
+    let height = u32::try_from(height).unwrap_or_default();
+    match ImageDimensions::new(width, height) {
+        Ok(dimensions) if dimensions.is_experimental() => format!(
+            "Valid · {} · experimental above 2560×1440",
+            format_pixel_count(dimensions.pixel_count())
+        ),
+        Ok(dimensions) => format!(
+            "Valid · {} · {:.2}:1",
+            format_pixel_count(dimensions.pixel_count()),
+            dimensions.width().max(dimensions.height()) as f64
+                / dimensions.width().min(dimensions.height()) as f64
+        ),
+        Err(error) => error.to_string(),
+    }
+}
+
+fn format_pixel_count(pixels: u64) -> String {
+    if pixels >= 1_000_000 {
+        format!("{:.2} MP", pixels as f64 / 1_000_000.0)
+    } else {
+        format!("{pixels} px")
+    }
 }
 
 fn format_duration(duration: Duration) -> String {
@@ -766,8 +961,10 @@ fn metadata_text(metadata: &ResponseMetadata) -> String {
 #[cfg(test)]
 mod tests {
     use std::future;
+    use std::path::PathBuf;
 
     use super::*;
+    use crate::generation::GenerationOptions;
 
     #[test]
     fn formats_request_id_without_other_response_data() {
@@ -788,6 +985,23 @@ mod tests {
     }
 
     #[test]
+    fn formats_sent_and_omitted_generation_settings() {
+        let options = GenerationOptions {
+            size: ImageSize::dimensions(2_048, 1_152).expect("test size should be valid"),
+            compatibility: CompatibilitySettings {
+                send_quality: false,
+                ..CompatibilitySettings::default()
+            },
+            ..GenerationOptions::default()
+        };
+
+        assert_eq!(
+            generation_settings_text(&options),
+            "Dimensions 2048x1152  ·  Quality omitted  ·  Background auto  ·  API format PNG"
+        );
+    }
+
+    #[test]
     fn gui_event_loop_scope_has_a_tokio_reactor() {
         let runtime = build_worker_runtime().expect("worker runtime should build");
 
@@ -799,6 +1013,54 @@ mod tests {
         });
 
         assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn dimension_status_distinguishes_standard_experimental_and_invalid_sizes() {
+        assert!(dimension_status(2_048, 1_152).starts_with("Valid · 2.36 MP"));
+        assert!(dimension_status(3_840, 2_160).contains("experimental"));
+        assert!(dimension_status(1_001, 1_024).contains("divisible by 16"));
+    }
+
+    #[test]
+    fn recent_results_are_bounded_and_selectable() {
+        let store = ResultStore::default();
+        for index in 0..8 {
+            store.push(generation_result(index));
+        }
+
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.len(), MAX_RECENT_RESULTS);
+        assert_eq!(
+            snapshot[0].0.image.path(),
+            PathBuf::from("/tmp/generated-7.png")
+        );
+        assert!(snapshot[0].1);
+
+        let selected = store.select(2).expect("third recent result should exist");
+        assert_eq!(selected.image.path(), PathBuf::from("/tmp/generated-5.png"));
+        assert!(store.snapshot()[2].1);
+        assert!(store.select(MAX_RECENT_RESULTS).is_none());
+    }
+
+    fn generation_result(index: u32) -> GenerationResult {
+        let image = GeneratedImage::new(
+            PersistedImage {
+                path: PathBuf::from(format!("/tmp/generated-{index}.png")),
+                width: 1_024,
+                height: 1_024,
+                file_size: 24,
+                output_format: OutputFormat::Png,
+            },
+            Duration::from_millis(250),
+            ResponseMetadata::default(),
+            GenerationInput::new("test prompt", GenerationOptions::default())
+                .expect("test generation input should be valid"),
+        );
+        GenerationResult {
+            image,
+            pixels: SharedPixelBuffer::new(1, 1),
+        }
     }
 
     #[tokio::test]

@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::domain::GeneratedImage;
 use crate::generation::OutputFormat;
 use crate::storage;
+use crate::xdg::AppPaths;
 
 #[derive(Debug, Error)]
 pub(crate) enum ResultActionError {
@@ -49,7 +50,9 @@ pub(crate) async fn save_as(image: &GeneratedImage) -> Result<Option<PathBuf>, R
             output_format.display_name(),
             format_extensions(output_format),
         );
-    if let Some(parent) = image.path().parent() {
+    if let Ok(paths) = AppPaths::discover() {
+        dialog = dialog.set_directory(paths.pictures_dir());
+    } else if let Some(parent) = image.path().parent() {
         dialog = dialog.set_directory(parent);
     }
 

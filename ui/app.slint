@@ -2,26 +2,46 @@ import {
     Button,
     CheckBox,
     ComboBox,
-    HorizontalBox,
     Palette,
     ScrollView,
     Spinner,
-    TextEdit,
-    VerticalBox
+    SpinBox,
+    StyleMetrics,
+    TextEdit
 } from "std-widgets.slint";
+
+export struct RecentGenerationItem {
+    preview: image,
+    label: string,
+    selected: bool,
+}
+
+component SectionTitle {
+    in property <string> text;
+
+    height: 22px;
+    Text {
+        text: root.text;
+        color: Palette.foreground;
+        font-size: 16px;
+        font-weight: 650;
+        vertical-alignment: center;
+    }
+}
 
 component LabeledChoice {
     in property <string> label;
     in property <[string]> choices;
     in-out property <string> value;
     in property <bool> enabled: true;
+    callback selected(string);
 
     height: 58px;
-    min-width: 180px;
+    min-width: 172px;
     horizontal-stretch: 1;
 
-    VerticalBox {
-        spacing: 4px;
+    VerticalLayout {
+        spacing: 5px;
         Text {
             text: root.label;
             color: Palette.foreground;
@@ -31,130 +51,186 @@ component LabeledChoice {
             model: root.choices;
             current-value <=> root.value;
             enabled: root.enabled;
+            selected(value) => { root.selected(value); }
         }
     }
 }
 
-export component AppWindow inherits Window {
-    title: "A6 Image Studio";
-    preferred-width: 980px;
-    preferred-height: 860px;
-    min-width: 520px;
-    min-height: 400px;
-    background: Palette.background;
-
-    in-out property <string> prompt: "A single solid blue circle centered on a plain white background";
-    in-out property <string> size-value: "1024x1024";
-    in-out property <string> quality-value: "low";
-    in-out property <string> background-value: "auto";
-    in-out property <string> output-format-value: "PNG";
-    in-out property <bool> send-size: true;
-    in-out property <bool> send-quality: true;
-    in-out property <bool> send-background: true;
-    in-out property <bool> send-output-format: true;
-    in-out property <bool> compatibility-expanded: false;
-
-    in property <string> connection-status: "Starting";
-    in property <string> endpoint-text: "";
-    in property <string> api-key-status: "";
-    in property <string> model-text: "gpt-image-2";
-    in property <string> error-text: "";
-    in property <string> result-details: "";
-    in property <string> result-duration: "";
-    in property <string> result-dimensions: "";
-    in property <string> result-file-size: "";
-    in property <string> result-format: "";
-    in property <string> result-path: "";
-    in property <string> result-request-id: "";
-    in property <string> action-status: "";
-    in property <bool> busy: false;
-    in property <bool> action-busy: false;
-    in property <bool> configured: false;
-    in property <bool> has-result: false;
-    in property <image> generated-image;
-
+component CompactHeader {
+    in property <bool> compact;
+    in property <string> connection-status;
+    in property <string> endpoint-text;
+    in property <string> api-key-status;
+    in property <string> model-text;
+    in property <string> status-details;
+    in property <bool> configured;
+    in property <bool> busy;
     callback test-connection();
-    callback generate-image();
-    callback cancel-operation();
-    callback save-as();
-    callback copy-image();
-    callback copy-prompt(string);
-    callback regenerate();
-    callback open-containing-folder();
 
-    scroll := ScrollView {
-        viewport-width: self.visible-width;
-        viewport-height: max(self.visible-height, content.min-height);
+    height: root.compact ? 144px : 104px;
 
-        content := VerticalBox {
-            width: scroll.visible-width;
-            height: self.min-height;
-            padding-left: 20px;
-            padding-right: 28px;
-            padding-top: 18px;
-            padding-bottom: 20px;
-            spacing: 14px;
+    Rectangle {
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 8px;
+        background: Palette.alternate-background;
 
-            Text {
-                text: "A6 Image Studio";
-                font-size: 24px;
-                font-weight: 650;
-                color: Palette.foreground;
-            }
+        VerticalLayout {
+            padding: 12px;
+            spacing: 7px;
 
-            Rectangle {
-                height: 148px;
-                border-width: 1px;
-                border-color: Palette.border;
-                border-radius: 7px;
-                background: Palette.alternate-background;
-
-                VerticalBox {
-                    padding: 12px;
-                    spacing: 5px;
-
-                    HorizontalLayout {
-                        spacing: 10px;
-                        Text { text: "Connection"; font-weight: 600; color: Palette.foreground; }
-                        Text {
-                            text: root.connection-status;
-                            color: Palette.foreground;
-                            overflow: elide;
-                            horizontal-stretch: 1;
-                        }
-                        Button {
-                            text: "Test connection";
-                            enabled: root.configured && !root.busy;
-                            clicked => { root.test-connection(); }
-                        }
+            HorizontalLayout {
+                spacing: 10px;
+                Image {
+                    source: @image-url("../assets/icons/hicolor/scalable/apps/io.github.grandfathertech.a6-image-studio.svg");
+                    width: 34px;
+                    height: 34px;
+                    image-fit: contain;
+                    accessible-label: "A6 Image Studio icon";
+                }
+                VerticalLayout {
+                    spacing: 0px;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: "A6 Image Studio";
+                        color: Palette.foreground;
+                        font-size: 20px;
+                        font-weight: 680;
+                        vertical-alignment: center;
                     }
-                    Text { text: "Endpoint: " + root.endpoint-text; color: Palette.foreground; overflow: elide; }
-                    Text { text: "API key: " + root.api-key-status; color: Palette.foreground; overflow: elide; }
-                    Text { text: "Model: " + root.model-text; color: Palette.foreground; overflow: elide; }
+                    Text {
+                        text: root.model-text + "  ·  " + root.connection-status;
+                        color: Palette.foreground;
+                        opacity: 0.78;
+                        overflow: elide;
+                    }
+                }
+                if !root.compact: Button {
+                    text: "Test connection";
+                    enabled: root.configured && !root.busy;
+                    clicked => { root.test-connection(); }
                 }
             }
 
-            Text {
-                text: "Prompt";
-                font-weight: 600;
-                color: Palette.foreground;
+            if root.compact: HorizontalLayout {
+                Button {
+                    text: "Test connection";
+                    enabled: root.configured && !root.busy;
+                    horizontal-stretch: 0;
+                    clicked => { root.test-connection(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
             }
 
+            Text {
+                text: "Endpoint  " + root.endpoint-text + "    ·    API key  " + root.api-key-status;
+                color: Palette.foreground;
+                opacity: 0.82;
+                overflow: elide;
+            }
+            if root.status-details != "": Text {
+                text: root.status-details;
+                color: Palette.foreground;
+                opacity: 0.72;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+component GenerationPanel {
+    in property <bool> compact;
+    in-out property <string> prompt;
+    in-out property <string> size-value;
+    in-out property <string> quality-value;
+    in-out property <string> background-value;
+    in-out property <string> output-format-value;
+    in-out property <int> custom-width;
+    in-out property <int> custom-height;
+    in property <string> dimension-status;
+    in-out property <bool> send-size;
+    in-out property <bool> send-quality;
+    in-out property <bool> send-background;
+    in-out property <bool> send-output-format;
+    in-out property <bool> compatibility-expanded;
+    in property <string> error-text;
+    in property <string> operation-status;
+    in property <bool> busy;
+    in property <bool> configured;
+    callback custom-dimensions-changed(int, int);
+    callback generate-image();
+    callback cancel-operation();
+
+    property <bool> custom-size: root.size-value == "Custom…";
+    property <bool> experimental-preset:
+        root.size-value == "2048x2048"
+        || root.size-value == "3840x2160"
+        || root.size-value == "2160x3840";
+    height: 540px
+        + (root.send-size && root.custom-size ? 98px : 0px)
+        + (root.send-size && root.experimental-preset ? 24px : 0px)
+        + (root.compatibility-expanded ? 100px : 0px)
+        + (root.error-text != "" ? 82px : 0px);
+    min-width: 360px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 8px;
+        background: Palette.alternate-background;
+
+        VerticalLayout {
+            padding: 14px;
+            spacing: 12px;
+
+            SectionTitle { text: "Create"; }
+            Text {
+                text: "Describe the image, then choose how it should be rendered.";
+                color: Palette.foreground;
+                opacity: 0.72;
+                wrap: word-wrap;
+            }
             TextEdit {
                 text <=> root.prompt;
                 placeholder-text: "Describe the image you want to generate";
-                height: 112px;
+                min-height: 142px;
                 enabled: !root.busy;
                 wrap: word-wrap;
+            }
+
+            Text {
+                text: "Generation settings";
+                color: Palette.foreground;
+                font-weight: 650;
             }
 
             HorizontalLayout {
                 spacing: 12px;
                 if root.send-size: LabeledChoice {
-                    label: "Size";
-                    choices: ["auto", "1024x1024", "1024x1536", "1536x1024"];
+                    label: "Dimensions";
+                    choices: [
+                        "auto",
+                        "1024x1024",
+                        "1536x1024",
+                        "1024x1536",
+                        "2048x2048",
+                        "2048x1152",
+                        "1152x2048",
+                        "2560x1440",
+                        "1440x2560",
+                        "3840x2160",
+                        "2160x3840",
+                        "Custom…"
+                    ];
                     value <=> root.size-value;
                     enabled: !root.busy;
+                    selected(value) => {
+                        if value == "Custom…" {
+                            root.custom-dimensions-changed(root.custom-width, root.custom-height);
+                        }
+                    }
                 }
                 if root.send-quality: LabeledChoice {
                     label: "Quality";
@@ -162,6 +238,54 @@ export component AppWindow inherits Window {
                     value <=> root.quality-value;
                     enabled: !root.busy;
                 }
+            }
+
+            if root.send-size && root.custom-size: VerticalLayout {
+                spacing: 6px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text { text: "Width"; color: Palette.foreground; font-weight: 600; }
+                        SpinBox {
+                            minimum: 16;
+                            maximum: 3840;
+                            step-size: 16;
+                            value <=> root.custom-width;
+                            enabled: !root.busy;
+                            edited => {
+                                root.custom-dimensions-changed(root.custom-width, root.custom-height);
+                            }
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text { text: "Height"; color: Palette.foreground; font-weight: 600; }
+                        SpinBox {
+                            minimum: 16;
+                            maximum: 3840;
+                            step-size: 16;
+                            value <=> root.custom-height;
+                            enabled: !root.busy;
+                            edited => {
+                                root.custom-dimensions-changed(root.custom-width, root.custom-height);
+                            }
+                        }
+                    }
+                }
+                Text {
+                    text: root.dimension-status;
+                    color: Palette.foreground;
+                    opacity: 0.72;
+                    wrap: word-wrap;
+                }
+            }
+
+            if root.send-size && root.experimental-preset: Text {
+                text: "Experimental: this preset exceeds 2560×1440 total pixels.";
+                color: Palette.foreground;
+                opacity: 0.72;
+                wrap: word-wrap;
             }
 
             HorizontalLayout {
@@ -181,69 +305,109 @@ export component AppWindow inherits Window {
             }
 
             Rectangle {
-                height: root.compatibility-expanded ? 126px : 42px;
+                height: root.compatibility-expanded ? 132px : 40px;
                 border-width: 1px;
                 border-color: Palette.border;
-                border-radius: 7px;
-                background: Palette.alternate-background;
+                border-radius: 6px;
+                background: Palette.background;
 
-                VerticalBox {
+                VerticalLayout {
                     padding: 8px;
                     spacing: 8px;
-                    Button {
-                        text: root.compatibility-expanded
-                            ? "Compatibility settings  ▴"
-                            : "Compatibility settings  ▾";
-                        enabled: !root.busy;
-                        clicked => {
-                            root.compatibility-expanded = !root.compatibility-expanded;
+
+                    HorizontalLayout {
+                        spacing: 0px;
+                        Button {
+                            text: root.compatibility-expanded
+                                ? "Compatibility settings  ▴"
+                                : "Compatibility settings  ▾";
+                            enabled: !root.busy;
+                            horizontal-stretch: 0;
+                            clicked => {
+                                root.compatibility-expanded = !root.compatibility-expanded;
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+
+                    if root.compatibility-expanded: HorizontalLayout {
+                        spacing: 16px;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            CheckBox {
+                                width: parent.width;
+                                text: "Send dimensions";
+                                checked <=> root.send-size;
+                                enabled: !root.busy;
+                            }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            CheckBox {
+                                width: parent.width;
+                                text: "Send quality";
+                                checked <=> root.send-quality;
+                                enabled: !root.busy;
+                            }
                         }
                     }
                     if root.compatibility-expanded: HorizontalLayout {
-                        spacing: 12px;
-                        CheckBox {
-                            text: "Send size";
-                            checked <=> root.send-size;
-                            enabled: !root.busy;
+                        spacing: 16px;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            CheckBox {
+                                width: parent.width;
+                                text: "Send background";
+                                checked <=> root.send-background;
+                                enabled: !root.busy;
+                            }
                         }
-                        CheckBox {
-                            text: "Send quality";
-                            checked <=> root.send-quality;
-                            enabled: !root.busy;
-                        }
-                    }
-                    if root.compatibility-expanded: HorizontalLayout {
-                        spacing: 12px;
-                        CheckBox {
-                            text: "Send background";
-                            checked <=> root.send-background;
-                            enabled: !root.busy;
-                        }
-                        CheckBox {
-                            text: "Send output format";
-                            checked <=> root.send-output-format;
-                            enabled: !root.busy;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            CheckBox {
+                                width: parent.width;
+                                text: "Send output format";
+                                checked <=> root.send-output-format;
+                                enabled: !root.busy;
+                            }
                         }
                     }
                 }
             }
 
-            HorizontalBox {
-                padding: 0px;
-                spacing: 10px;
+            if root.error-text != "": Rectangle {
+                height: 72px;
+                border-width: 1px;
+                border-color: Palette.border;
+                border-radius: 6px;
+                background: Palette.background;
                 Text {
-                    text: root.busy
-                        ? root.connection-status
-                        : "Generation requests may be billable";
+                    x: 10px;
+                    y: 8px;
+                    width: parent.width - 20px;
+                    height: parent.height - 16px;
+                    text: root.error-text;
                     color: Palette.foreground;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
+                    wrap: word-wrap;
                     overflow: elide;
+                    accessible-label: "Error: " + root.error-text;
                 }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
                 if root.busy: Spinner {
                     width: 28px;
                     height: 28px;
                     indeterminate: true;
+                }
+                Text {
+                    text: root.busy ? root.operation-status : "Generation may be billable";
+                    color: Palette.foreground;
+                    opacity: 0.76;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
                 }
                 Button {
                     text: "Cancel";
@@ -251,36 +415,116 @@ export component AppWindow inherits Window {
                     clicked => { root.cancel-operation(); }
                 }
                 Button {
-                    text: "Generate image";
+                    text: "Generate";
                     primary: true;
                     enabled: root.configured && !root.busy;
                     clicked => { root.generate-image(); }
                 }
             }
+        }
+    }
+}
 
-            if root.error-text != "": Rectangle {
-                height: 92px;
-                border-width: 1px;
-                border-color: Palette.border;
-                border-radius: 7px;
-                background: Palette.alternate-background;
-                TextEdit {
-                    x: 10px;
-                    y: 10px;
-                    width: parent.width - 20px;
-                    height: parent.height - 20px;
-                    text: "Error: " + root.error-text;
-                    wrap: word-wrap;
-                    read-only: true;
+component RecentThumbnail {
+    in property <RecentGenerationItem> item;
+    callback activated();
+
+    width: 68px;
+    height: 86px;
+
+    Rectangle {
+        border-width: root.item.selected ? 2px : 1px;
+        border-color: root.item.selected ? Palette.accent-background : Palette.border;
+        border-radius: 6px;
+        background: Palette.background;
+        clip: true;
+
+        VerticalLayout {
+            padding: 4px;
+            spacing: 3px;
+            Image {
+                source: root.item.preview;
+                image-fit: contain;
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                accessible-label: "Recent generated image " + root.item.label;
+            }
+            Text {
+                text: root.item.label;
+                color: Palette.foreground;
+                font-size: 11px;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.activated(); }
+        }
+    }
+}
+
+component ResultPanel {
+    in property <bool> compact;
+    in property <image> generated-image;
+    in property <[RecentGenerationItem]> recent-items;
+    in property <bool> has-result;
+    in property <bool> busy;
+    in property <bool> action-busy;
+    in property <string> operation-status;
+    in property <string> action-status;
+    in property <string> result-duration;
+    in property <string> result-dimensions;
+    in property <string> result-file-size;
+    in property <string> result-format;
+    in property <string> result-path;
+    in property <string> result-prompt;
+    in property <string> result-request-id;
+    in property <string> result-settings;
+    in-out property <bool> details-expanded;
+    callback save-as();
+    callback copy-image();
+    callback copy-prompt();
+    callback regenerate();
+    callback open-containing-folder();
+    callback select-recent(int);
+
+    property <bool> generating: root.busy && root.operation-status == "Generating image";
+    height: 642px + (root.details-expanded && root.has-result ? 204px : 0px);
+    min-width: 360px;
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Palette.border;
+        border-radius: 8px;
+        background: Palette.alternate-background;
+
+        VerticalLayout {
+            padding: 14px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                SectionTitle {
+                    text: root.has-result ? "Preview" : "Canvas";
+                    horizontal-stretch: 1;
+                }
+                if root.has-result: Text {
+                    text: root.result-dimensions + "  ·  " + root.result-format;
+                    color: Palette.foreground;
+                    opacity: 0.72;
+                    vertical-alignment: center;
                 }
             }
 
             Rectangle {
-                height: 330px;
+                min-height: root.compact ? 300px : 380px;
+                vertical-stretch: 1;
                 border-width: 1px;
                 border-color: Palette.border;
-                border-radius: 7px;
-                background: Palette.alternate-background;
+                border-radius: 6px;
+                background: Palette.background;
                 clip: true;
 
                 if root.generated-image.width > 0: Image {
@@ -293,44 +537,54 @@ export component AppWindow inherits Window {
                     accessible-label: "Generated image preview";
                 }
 
-                if root.generated-image.width == 0: Text {
-                    text: root.busy ? "Generating image…" : "Generated image preview";
-                    color: Palette.foreground;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                if root.generated-image.width == 0 && !root.generating: VerticalLayout {
+                    alignment: center;
+                    spacing: 8px;
+                    Text {
+                        text: "Your generated image will appear here";
+                        color: Palette.foreground;
+                        font-size: 17px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: "Choose a prompt and settings, then select Generate.";
+                        color: Palette.foreground;
+                        opacity: 0.64;
+                        horizontal-alignment: center;
+                    }
+                }
+
+                if root.generating: VerticalLayout {
+                    alignment: center;
+                    spacing: 10px;
+                    Spinner {
+                        width: 38px;
+                        height: 38px;
+                        indeterminate: true;
+                    }
+                    Text {
+                        text: "Generating image…";
+                        color: Palette.foreground;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                    }
                 }
             }
 
-            if root.has-result: Rectangle {
-                height: 154px;
-                border-width: 1px;
-                border-color: Palette.border;
-                border-radius: 7px;
-                background: Palette.alternate-background;
-
-                VerticalBox {
-                    padding: 12px;
-                    spacing: 6px;
-                    Text { text: "Generated image"; color: Palette.foreground; font-weight: 600; }
-                    HorizontalLayout {
-                        spacing: 20px;
-                        Text { text: "Duration: " + root.result-duration; color: Palette.foreground; horizontal-stretch: 1; }
-                        Text { text: "Dimensions: " + root.result-dimensions; color: Palette.foreground; horizontal-stretch: 1; }
-                    }
-                    HorizontalLayout {
-                        spacing: 20px;
-                        Text { text: "File size: " + root.result-file-size; color: Palette.foreground; horizontal-stretch: 1; }
-                        Text { text: "Format: " + root.result-format; color: Palette.foreground; horizontal-stretch: 1; }
-                    }
-                    Text {
-                        text: "Request ID: " + root.result-request-id;
-                        color: Palette.foreground;
-                        overflow: elide;
-                    }
-                    Text {
-                        text: "Saved to: " + root.result-path;
-                        color: Palette.foreground;
-                        overflow: elide;
+            if root.recent-items.length > 0: VerticalLayout {
+                spacing: 7px;
+                Text {
+                    text: "Recent this session";
+                    color: Palette.foreground;
+                    font-weight: 600;
+                }
+                HorizontalLayout {
+                    spacing: 7px;
+                    alignment: start;
+                    for item[index] in root.recent-items: RecentThumbnail {
+                        item: item;
+                        activated => { root.select-recent(index); }
                     }
                 }
             }
@@ -350,36 +604,284 @@ export component AppWindow inherits Window {
                 Button {
                     text: "Copy prompt";
                     enabled: !root.action-busy;
-                    clicked => { root.copy-prompt(root.prompt); }
+                    clicked => { root.copy-prompt(); }
                 }
+                Rectangle { horizontal-stretch: 1; }
             }
 
             if root.has-result: HorizontalLayout {
                 spacing: 8px;
                 Button {
                     text: "Regenerate";
-                    enabled: root.configured && !root.busy && !root.action-busy;
+                    enabled: !root.busy && !root.action-busy;
                     clicked => { root.regenerate(); }
                 }
                 Button {
-                    text: "Open containing folder";
+                    text: "Open folder";
                     enabled: !root.action-busy;
                     clicked => { root.open-containing-folder(); }
                 }
+                Rectangle { horizontal-stretch: 1; }
             }
 
             if root.action-status != "": Text {
                 text: root.action-status;
                 color: Palette.foreground;
+                opacity: 0.78;
                 wrap: word-wrap;
-                min-height: 24px;
+                min-height: 22px;
             }
 
-            if root.result-details != "": Text {
-                text: root.result-details;
-                color: Palette.foreground;
-                wrap: word-wrap;
-                min-height: 24px;
+            if root.has-result: VerticalLayout {
+                spacing: 7px;
+                HorizontalLayout {
+                    Button {
+                        text: root.details-expanded ? "Request details  ▴" : "Request details  ▾";
+                        horizontal-stretch: 0;
+                        clicked => { root.details-expanded = !root.details-expanded; }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                if root.details-expanded: Rectangle {
+                    height: 182px;
+                    border-width: 1px;
+                    border-color: Palette.border;
+                    border-radius: 6px;
+                    background: Palette.background;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 5px;
+                        Text {
+                            text: "Prompt  " + root.result-prompt;
+                            color: Palette.foreground;
+                            wrap: word-wrap;
+                            max-height: 44px;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: root.result-settings;
+                            color: Palette.foreground;
+                            wrap: word-wrap;
+                            max-height: 40px;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: "Duration  " + root.result-duration
+                                + "    ·    File size  " + root.result-file-size;
+                            color: Palette.foreground;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: "Request ID  " + root.result-request-id;
+                            color: Palette.foreground;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: "Saved to  " + root.result-path;
+                            color: Palette.foreground;
+                            wrap: word-wrap;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "A6 Image Studio";
+    icon: @image-url("../assets/icons/hicolor/scalable/apps/io.github.grandfathertech.a6-image-studio.svg");
+    preferred-width: 1180px;
+    preferred-height: 820px;
+    min-width: 500px;
+    min-height: 400px;
+    background: Palette.background;
+
+    property <bool> compact-layout: root.width < 900px;
+
+    in-out property <string> prompt: "A single solid blue circle centered on a plain white background";
+    in-out property <string> size-value: "1024x1024";
+    in-out property <string> quality-value: "low";
+    in-out property <string> background-value: "auto";
+    in-out property <string> output-format-value: "PNG";
+    in-out property <int> custom-width: 1024;
+    in-out property <int> custom-height: 1024;
+    in property <string> dimension-status: "";
+    in-out property <bool> send-size: true;
+    in-out property <bool> send-quality: true;
+    in-out property <bool> send-background: true;
+    in-out property <bool> send-output-format: true;
+    in-out property <bool> compatibility-expanded: false;
+    in-out property <bool> details-expanded: false;
+
+    in property <string> connection-status: "Starting";
+    in property <string> endpoint-text: "";
+    in property <string> api-key-status: "";
+    in property <string> model-text: "gpt-image-2";
+    in property <string> error-text: "";
+    in property <string> result-details: "";
+    in property <string> result-duration: "";
+    in property <string> result-dimensions: "";
+    in property <string> result-file-size: "";
+    in property <string> result-format: "";
+    in property <string> result-path: "";
+    in property <string> result-prompt: "";
+    in property <string> result-request-id: "";
+    in property <string> result-settings: "";
+    in property <string> action-status: "";
+    in property <bool> busy: false;
+    in property <bool> action-busy: false;
+    in property <bool> configured: false;
+    in property <bool> has-result: false;
+    in property <image> generated-image;
+    in property <[RecentGenerationItem]> recent-items;
+
+    callback test-connection();
+    callback generate-image();
+    callback cancel-operation();
+    callback custom-dimensions-changed(int, int);
+    callback save-as();
+    callback copy-image();
+    callback copy-prompt(string);
+    callback regenerate();
+    callback open-containing-folder();
+    callback select-recent(int);
+
+    scroll := ScrollView {
+        viewport-width: self.visible-width;
+        viewport-height: max(self.visible-height, content.min-height);
+
+        content := VerticalLayout {
+            width: scroll.visible-width;
+            height: self.min-height;
+            padding-left: 16px;
+            padding-right: 24px;
+            padding-top: 14px;
+            padding-bottom: 18px;
+            spacing: 14px;
+
+            CompactHeader {
+                compact: root.compact-layout;
+                connection-status: root.connection-status;
+                endpoint-text: root.endpoint-text;
+                api-key-status: root.api-key-status;
+                model-text: root.model-text;
+                status-details: root.result-details;
+                configured: root.configured;
+                busy: root.busy;
+                test-connection => { root.test-connection(); }
+            }
+
+            if !root.compact-layout: HorizontalLayout {
+                spacing: 14px;
+                GenerationPanel {
+                    width: 430px;
+                    compact: false;
+                    prompt <=> root.prompt;
+                    size-value <=> root.size-value;
+                    quality-value <=> root.quality-value;
+                    background-value <=> root.background-value;
+                    output-format-value <=> root.output-format-value;
+                    custom-width <=> root.custom-width;
+                    custom-height <=> root.custom-height;
+                    dimension-status: root.dimension-status;
+                    send-size <=> root.send-size;
+                    send-quality <=> root.send-quality;
+                    send-background <=> root.send-background;
+                    send-output-format <=> root.send-output-format;
+                    compatibility-expanded <=> root.compatibility-expanded;
+                    error-text: root.error-text;
+                    operation-status: root.connection-status;
+                    busy: root.busy;
+                    configured: root.configured;
+                    custom-dimensions-changed(width, height) => {
+                        root.custom-dimensions-changed(width, height);
+                    }
+                    generate-image => { root.generate-image(); }
+                    cancel-operation => { root.cancel-operation(); }
+                }
+                ResultPanel {
+                    compact: false;
+                    generated-image: root.generated-image;
+                    recent-items: root.recent-items;
+                    has-result: root.has-result;
+                    busy: root.busy;
+                    action-busy: root.action-busy;
+                    operation-status: root.connection-status;
+                    action-status: root.action-status;
+                    result-duration: root.result-duration;
+                    result-dimensions: root.result-dimensions;
+                    result-file-size: root.result-file-size;
+                    result-format: root.result-format;
+                    result-path: root.result-path;
+                    result-prompt: root.result-prompt;
+                    result-request-id: root.result-request-id;
+                    result-settings: root.result-settings;
+                    details-expanded <=> root.details-expanded;
+                    save-as => { root.save-as(); }
+                    copy-image => { root.copy-image(); }
+                    copy-prompt => { root.copy-prompt(root.prompt); }
+                    regenerate => { root.regenerate(); }
+                    open-containing-folder => { root.open-containing-folder(); }
+                    select-recent(index) => { root.select-recent(index); }
+                }
+            }
+
+            if root.compact-layout: VerticalLayout {
+                spacing: 14px;
+                GenerationPanel {
+                    width: parent.width;
+                    compact: true;
+                    prompt <=> root.prompt;
+                    size-value <=> root.size-value;
+                    quality-value <=> root.quality-value;
+                    background-value <=> root.background-value;
+                    output-format-value <=> root.output-format-value;
+                    custom-width <=> root.custom-width;
+                    custom-height <=> root.custom-height;
+                    dimension-status: root.dimension-status;
+                    send-size <=> root.send-size;
+                    send-quality <=> root.send-quality;
+                    send-background <=> root.send-background;
+                    send-output-format <=> root.send-output-format;
+                    compatibility-expanded <=> root.compatibility-expanded;
+                    error-text: root.error-text;
+                    operation-status: root.connection-status;
+                    busy: root.busy;
+                    configured: root.configured;
+                    custom-dimensions-changed(width, height) => {
+                        root.custom-dimensions-changed(width, height);
+                    }
+                    generate-image => { root.generate-image(); }
+                    cancel-operation => { root.cancel-operation(); }
+                }
+                ResultPanel {
+                    width: parent.width;
+                    compact: true;
+                    generated-image: root.generated-image;
+                    recent-items: root.recent-items;
+                    has-result: root.has-result;
+                    busy: root.busy;
+                    action-busy: root.action-busy;
+                    operation-status: root.connection-status;
+                    action-status: root.action-status;
+                    result-duration: root.result-duration;
+                    result-dimensions: root.result-dimensions;
+                    result-file-size: root.result-file-size;
+                    result-format: root.result-format;
+                    result-path: root.result-path;
+                    result-prompt: root.result-prompt;
+                    result-request-id: root.result-request-id;
+                    result-settings: root.result-settings;
+                    details-expanded <=> root.details-expanded;
+                    save-as => { root.save-as(); }
+                    copy-image => { root.copy-image(); }
+                    copy-prompt => { root.copy-prompt(root.prompt); }
+                    regenerate => { root.regenerate(); }
+                    open-containing-folder => { root.open-containing-folder(); }
+                    select-recent(index) => { root.select-recent(index); }
+                }
             }
         }
     }

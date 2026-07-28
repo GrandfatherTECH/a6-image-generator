@@ -154,7 +154,6 @@ mod tests {
                 width: 2,
                 height: 3,
                 file_size: 24,
-                preview_rgba: vec![0; 2 * 3 * 4],
                 output_format: OutputFormat::Png,
             },
             Duration::from_millis(250),

@@ -2,7 +2,7 @@
 
 ## Scope and phase discipline
 
-The repository currently implements Phase 3. The Phase 0 CLI, manually verified Phase 1 desktop workflow, and Phase 2 state architecture remain supported. Phase 3 adds typed generation options, optional compatibility fields, format-aware persistence, a scrollable interface, result metadata, and result actions.
+The repository currently implements Phase 4. The permanent CLI, manually verified generation workflow, explicit state architecture, typed controls, format-aware persistence, and result actions from earlier phases remain supported. Phase 4 adds arbitrary validated dimensions, a KDE-oriented responsive interface, bounded in-memory recent previews, standard XDG identity and paths, Qt-first styling with Winit fallback, and Linux desktop metadata.
 
 The command-line interface is a permanent application surface, not throwaway probe code. Future GUI code should call the library modules rather than duplicate configuration or HTTP behavior.
 
@@ -11,7 +11,7 @@ The command-line interface is a permanent application surface, not throwaway pro
 ```text
 src/main.rs          CLI parsing, human-readable output, exit status
 build.rs             compiles the external Slint source at build time
-ui/app.slint         scrollable Phase 3 desktop layout, properties, callbacks
+ui/app.slint         responsive Phase 4 desktop layout, properties, callbacks
 src/config.rs        environment loading, validation, secret masking
 src/generation.rs    typed controls, validation, API values, compatibility flags
 src/api/types.rs     typed gateway requests, responses, and metadata
@@ -22,6 +22,9 @@ src/app/state.rs     typed state machine and operation identity
 src/app/controller.rs configuration display, callbacks, workers, presentation
 src/app/actions.rs   Save As, clipboard, and containing-folder integrations
 src/storage/mod.rs   off-thread format conversion and atomic output commits
+src/xdg.rs           stable app ID and XDG config/data/cache/pictures discovery
+assets/              freedesktop scalable and raster application icons
+packaging/           desktop entry and AppStream metadata
 tests/               mock-server transport tests; never real API calls
 ```
 
@@ -35,21 +38,21 @@ Generation responses are decoded in this order:
 2. When no Base64 value exists, use the first URL as a compatibility fallback.
 3. Fail explicitly if neither form exists.
 
-`GenerationInput` owns the trimmed prompt and `GenerationOptions`. The four option enums accept only the Phase 3 values and expose canonical API strings. `CompatibilitySettings` determines whether each optional Serde field is present; disabled fields use `skip_serializing_if` and are absent from the JSON rather than serialized as null. Transparent JPEG is rejected before network access.
+`GenerationInput` owns the trimmed prompt and `GenerationOptions`. Quality, background, and format enums expose canonical API strings. `ImageSize` is either `Auto` or validated `ImageDimensions`; arbitrary explicit dimensions must meet the documented edge, 16-pixel alignment, 3:1 aspect-ratio, and total-pixel boundaries before network access. `CompatibilitySettings` determines whether each optional Serde field is present; disabled fields use `skip_serializing_if` and are absent from the JSON rather than serialized as null. Transparent JPEG is rejected before network access.
 
-Image validation and format conversion run through `tokio::task::spawn_blocking`. PNG, WebP, and JPEG output are supported. JPEG conversion flattens alpha onto white. The desktop save path also obtains RGBA preview pixels during that same decode pass. A `SharedPixelBuffer` is built on a Tokio worker, then the inexpensive Slint `Image` handle is created on the UI event loop.
+Image validation and format conversion run through `tokio::task::spawn_blocking`. PNG, WebP, and JPEG output are supported. JPEG conversion flattens alpha onto white. The desktop save path also obtains RGBA preview pixels during that same decode pass. Preview dimensions are bounded to a 1600-pixel maximum edge, while the encoded durable output retains its actual dimensions. A `SharedPixelBuffer` is built on a Tokio worker, then the inexpensive Slint `Image` handle is created on the UI event loop.
 
 Output is written to a uniquely named hidden temporary file in the destination directory. The file is fully written, flushed, and synchronized before a same-directory rename exposes the final image. Failures attempt to remove the temporary file, so readers do not observe partial final output. Save As reuses the same atomic write path.
 
 ## Desktop execution model
 
-`app::run` creates a separate multi-thread Tokio runtime for background work, enters its reactor context on the main thread, and then creates and runs the Slint component there. Keeping the reactor entered for the lifetime of the Slint event loop is important because Linux desktop integrations may acquire Tokio-backed `zbus` behavior through Cargo feature unification even when Slint polls their futures itself. Slint callbacks only validate input, transition application state, update immediate UI properties, and spawn work. They never await network, decoding, or filesystem operations. A single configured `ApiClient` is created at startup and cheaply cloned for both connectivity and generation operations.
+`app::run` creates a separate multi-thread Tokio runtime for background work, enters its reactor context on the main thread, selects Slint's platform, sets `io.github.grandfathertech.a6-image-studio` before creating a window, and then creates and runs the component there. Keeping the reactor entered for the lifetime of the Slint event loop is important because Linux desktop integrations may acquire Tokio-backed `zbus` behavior through Cargo feature unification even when Slint polls their futures itself. Slint callbacks only validate input, transition application state, update immediate UI properties, and spawn work. They never await network, decoding, or filesystem operations. A single configured `ApiClient` is created at startup and cheaply cloned for both connectivity and generation operations.
 
 `StateMachine` is the source of truth for the explicit `Idle`, `Connecting`, `Generating`, `Success`, `Cancelled`, and `Error` states. Each async operation receives a typed `OperationId`. `OperationControl` couples that state machine to the active Tokio `AbortHandle`; cancellation enters `Cancelled` before aborting the worker. A completion is accepted only if its ID still belongs to the active connecting or generating state, so a cancelled or superseded request cannot overwrite newer UI state.
 
 Worker completion uses `Weak<AppWindow>::upgrade_in_event_loop`. The closure asks the state machine to accept the operation ID before presenting its sanitized error or successful result. Closing the window drops the strong Slint handle and any later worker result is discarded.
 
-The transport layer returns raw generation output. After validation and persistence, the controller constructs `domain::GeneratedImage`, which records the final path, dimensions, byte size, elapsed time, response metadata, shared preview pixels, output format, and the exact successful `GenerationInput`. Successful generation state owns this domain object rather than transport bytes or ad-hoc UI strings. A small result store retains the last accepted image when a later connection check changes the primary state; rejected stale results never enter that store.
+The transport layer returns raw generation output. After validation and persistence, the controller constructs `domain::GeneratedImage`, which records the final path, actual dimensions, byte size, elapsed time, response metadata, output format, and the exact successful `GenerationInput`. Successful generation state owns this domain object rather than transport bytes or ad-hoc UI strings. The controller pairs each domain object with its bounded `SharedPixelBuffer` in an in-memory `ResultStore`. The store retains at most six newest accepted results and tracks one selected result for preview and actions; rejected stale results never enter it. Persistence of this history belongs to Phase 5.
 
 The desktop request uses `ImageGenerationRequest::configured`. The permanent CLI smoke path remains deliberately fixed and uses `ImageGenerationRequest::smoke_test`, so GUI compatibility options cannot weaken its deterministic contract.
 
@@ -64,7 +67,11 @@ Result actions are independent of the generation state machine:
 - Folder opening invokes `xdg-open` directly without a shell.
 - All action completion text returns through `upgrade_in_event_loop`.
 
-The Slint root uses a `ScrollView` whose viewport height follows the content's minimum height. The content keeps a fixed natural layout while the viewport shrinks, preventing lower controls from becoming unreachable.
+The Slint root uses a `ScrollView` whose viewport height follows the content's minimum height. The content keeps a natural layout while the viewport shrinks, preventing lower controls from becoming unreachable. At 900 logical pixels the main workspace changes between side-by-side and stacked panels. Reusable Slint components keep the behavior and two-way bindings identical in both layouts. Colors come from `Palette`, native controls retain system focus treatment, and the UI adds no custom font family, gradients, glow, or decorative motion.
+
+`backend-qt` and `backend-winit` are both compiled. Slint selects Qt first when native Qt support was found at build time and otherwise uses Winit; `SLINT_BACKEND` can explicitly select `qt`, `winit-femtovg`, or `winit-software`. Wayland and X11 support remain enabled through Winit. The Qt dependency is optional at Slint's build-detection level, so source builds without a usable Qt development installation still retain the Winit path.
+
+`AppPaths` follows XDG environment variables with absolute-path validation and home-directory fallbacks. Durable generated files live below the data directory, Save As starts in the user pictures directory, and the configuration/cache paths are exposed for later phases without writing persistent state in Phase 4.
 
 The binary has three invocation surfaces:
 
@@ -74,7 +81,7 @@ The binary has three invocation surfaces:
 
 ## Quality checks
 
-Run the complete Phase 3 verification set:
+Run the complete Phase 4 verification set:
 
 ```bash
 cargo fmt --all -- --check
@@ -84,7 +91,15 @@ cargo test --all-targets
 cargo build --release --locked
 ```
 
-Tests use a bounded local HTTP mock server and must not use the real gateway or require `A6API_KEY`. Unit tests cover URL normalization, key masking, endpoint construction, Base64/URL parsing, malformed responses, structured/non-JSON errors, generation-option parsing and validation, optional-field omission, PNG/WebP/JPEG conversion, Save As extension checks, all state transitions, worker abortion, stale-result rejection, and atomic output commits. Integration tests verify request paths, all Phase 3 JSON fields, bearer authentication, response metadata, error categorization, and URL fallback transport.
+Tests use a bounded local HTTP mock server and must not use the real gateway or require `A6API_KEY`. Unit tests cover URL normalization, key masking, endpoint construction, Base64/URL parsing, malformed responses, structured/non-JSON errors, documented dimension boundaries, optional-field omission, bounded previews, XDG discovery, recent-result selection, PNG/WebP/JPEG conversion, Save As extension checks, all state transitions, worker abortion, stale-result rejection, and atomic output commits. Integration tests verify request paths, arbitrary custom size serialization, all generation JSON fields, bearer authentication, response metadata, error categorization, and URL fallback transport.
+
+Validate the freedesktop assets as well:
+
+```bash
+desktop-file-validate packaging/io.github.grandfathertech.a6-image-studio.desktop
+appstreamcli validate --no-net packaging/io.github.grandfathertech.a6-image-studio.metainfo.xml
+xmllint --noout assets/icons/hicolor/scalable/apps/io.github.grandfathertech.a6-image-studio.svg
+```
 
 ## Adding behavior
 
@@ -99,18 +114,21 @@ Tests use a bounded local HTTP mock server and must not use the real gateway or 
 
 ## Planned module growth
 
-Phase 4 adds the polished KDE-oriented visual design. Later phases add secure settings/history and Linux packaging in the order defined by the product specification.
+Phase 5 adds secure settings and persistent optional history. Later phases complete installation/package assembly in the order defined by the product specification.
 
-## Phase 3 manual test checklist
+## Phase 4 manual test checklist
 
-1. Start the app under KDE Wayland with `cargo run`, shrink the window to its minimum height, and verify the mouse wheel and scrollbar reach every control and result action.
-2. Confirm only a masked key and normalized endpoint are visible, then run `Test connection`.
-3. Generate one low-quality `1024x1024` PNG. Verify the window stays responsive, the preview appears, the result fields are readable, and no `.tmp` file remains.
-4. If charges are acceptable, test one portrait or landscape request and one WebP or JPEG request. Verify the file extension, detected encoding, dimensions, and displayed format agree.
-5. Select transparent background with JPEG and verify local validation rejects it without starting a request. Select PNG or WebP and verify the combination can be submitted.
-6. Expand compatibility settings, disable one field, generate if acceptable, and verify the server response is clear. Re-enable the field afterward.
-7. Test Save As, Copy image into a KDE application, Copy prompt into a text editor, Open containing folder, and Regenerate. Remember that Regenerate is billable.
-8. Start another generation, press `Cancel`, then start a connection test. Verify no late generation result replaces the newer state.
-9. Repeat scrolling and clipboard checks under X11 with `xclip` installed where available.
-10. Launch without `A6API_KEY` and verify the explicit error state is shown without a crash or network request.
-11. Re-run `check` and, only if another billable request is acceptable, `smoke-generate --yes` to confirm the CLI remains functional.
+1. Start under KDE Wayland with `cargo run`. Verify Qt-native controls and the system palette, then repeat with `SLINT_BACKEND=winit-software cargo run` to confirm the fallback.
+2. Resize across the 900-pixel responsive breakpoint and down to minimum width/height. Verify side-by-side panels become stacked and the scrollbar reaches every control and action.
+3. Confirm the compact header shows only a masked key and normalized endpoint, then run `Test connection`.
+4. Expand compatibility settings. Verify the compact expander does not fill the card and all four switches align in two columns.
+5. Open Dimensions and inspect every preset. Choose `Custom…`; test a valid custom size, a non-16-pixel edge, a ratio over 3:1, and pixel counts below/above the limits. Invalid input must be rejected before network access.
+6. Generate one low-quality `1024x1024` PNG. Verify responsiveness, preview, collapsed request details, exact metadata, and absence of leftover `.tmp` files.
+7. If charges are acceptable, generate several different sizes/formats. Verify up to six recent thumbnails appear, selecting an older one updates preview/metadata/action target, and a seventh removes the oldest.
+8. Test a 4K request only if the provider supports it and the charge is acceptable. Verify the saved file remains 3840×2160 while preview memory remains bounded.
+9. Select transparent background with JPEG and verify local rejection. For direct OpenAI `gpt-image-2`, expect transparent background itself to be unsupported; A6API compatibility may differ.
+10. Test Save As (defaulting to Pictures), Copy image, Copy prompt, Open folder, and Regenerate. Remember that Regenerate is billable.
+11. Cancel an active generation, then start a connection test. Verify no late result replaces the newer state.
+12. Repeat the launch, scroll, and clipboard checks under X11 where available.
+13. Launch without `A6API_KEY` and verify the explicit error state appears without a crash or network request.
+14. Re-run `check` and, only if another billable request is acceptable, `smoke-generate --yes` to confirm the permanent CLI remains functional.

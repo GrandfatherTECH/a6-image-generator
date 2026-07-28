@@ -31,32 +31,140 @@ macro_rules! string_enum {
     };
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub const IMAGE_DIMENSION_STEP: u32 = 16;
+pub const IMAGE_MAX_EDGE: u32 = 3_840;
+pub const IMAGE_MIN_PIXELS: u64 = 655_360;
+pub const IMAGE_MAX_PIXELS: u64 = 8_294_400;
+pub const IMAGE_EXPERIMENTAL_PIXELS: u64 = 2_560 * 1_440;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageDimensions {
+    width: u32,
+    height: u32,
+}
+
+impl ImageDimensions {
+    pub fn new(width: u32, height: u32) -> Result<Self, GenerationValidationError> {
+        if width == 0 || height == 0 || width > IMAGE_MAX_EDGE || height > IMAGE_MAX_EDGE {
+            return Err(GenerationValidationError::ImageEdge {
+                width,
+                height,
+                maximum: IMAGE_MAX_EDGE,
+            });
+        }
+        if !width.is_multiple_of(IMAGE_DIMENSION_STEP)
+            || !height.is_multiple_of(IMAGE_DIMENSION_STEP)
+        {
+            return Err(GenerationValidationError::ImageAlignment {
+                width,
+                height,
+                step: IMAGE_DIMENSION_STEP,
+            });
+        }
+
+        let long_edge = width.max(height);
+        let short_edge = width.min(height);
+        if long_edge > short_edge * 3 {
+            return Err(GenerationValidationError::ImageAspectRatio { width, height });
+        }
+
+        let pixels = u64::from(width) * u64::from(height);
+        if !(IMAGE_MIN_PIXELS..=IMAGE_MAX_PIXELS).contains(&pixels) {
+            return Err(GenerationValidationError::ImagePixelCount {
+                width,
+                height,
+                pixels,
+                minimum: IMAGE_MIN_PIXELS,
+                maximum: IMAGE_MAX_PIXELS,
+            });
+        }
+
+        Ok(Self { width, height })
+    }
+
+    pub const fn width(self) -> u32 {
+        self.width
+    }
+
+    pub const fn height(self) -> u32 {
+        self.height
+    }
+
+    pub const fn pixel_count(self) -> u64 {
+        self.width as u64 * self.height as u64
+    }
+
+    pub const fn is_experimental(self) -> bool {
+        self.pixel_count() > IMAGE_EXPERIMENTAL_PIXELS
+    }
+}
+
+impl fmt::Display for ImageDimensions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}x{}", self.width, self.height)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageSize {
     Auto,
-    #[default]
-    Square,
-    Portrait,
-    Landscape,
+    Dimensions(ImageDimensions),
+}
+
+impl Default for ImageSize {
+    fn default() -> Self {
+        Self::Dimensions(ImageDimensions {
+            width: 1_024,
+            height: 1_024,
+        })
+    }
 }
 
 impl ImageSize {
-    pub const fn api_value(self) -> &'static str {
+    pub fn dimensions(width: u32, height: u32) -> Result<Self, GenerationValidationError> {
+        ImageDimensions::new(width, height).map(Self::Dimensions)
+    }
+
+    pub fn api_value(self) -> String {
+        self.to_string()
+    }
+
+    pub const fn explicit_dimensions(self) -> Option<ImageDimensions> {
         match self {
-            Self::Auto => "auto",
-            Self::Square => "1024x1024",
-            Self::Portrait => "1024x1536",
-            Self::Landscape => "1536x1024",
+            Self::Auto => None,
+            Self::Dimensions(dimensions) => Some(dimensions),
         }
     }
 }
 
-string_enum!(ImageSize {
-    Auto => "auto",
-    Square => "1024x1024",
-    Portrait => "1024x1536",
-    Landscape => "1536x1024",
-});
+impl fmt::Display for ImageSize {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Auto => formatter.write_str("auto"),
+            Self::Dimensions(dimensions) => dimensions.fmt(formatter),
+        }
+    }
+}
+
+impl FromStr for ImageSize {
+    type Err = GenerationValidationError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value == "auto" {
+            return Ok(Self::Auto);
+        }
+        let (width, height) = value
+            .split_once('x')
+            .ok_or_else(|| GenerationValidationError::InvalidImageSize(value.to_owned()))?;
+        let width = width
+            .parse::<u32>()
+            .map_err(|_| GenerationValidationError::InvalidImageSize(value.to_owned()))?;
+        let height = height
+            .parse::<u32>()
+            .map_err(|_| GenerationValidationError::InvalidImageSize(value.to_owned()))?;
+        Self::dimensions(width, height)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ImageQuality {
@@ -235,6 +343,34 @@ pub enum GenerationValidationError {
     EmptyPrompt,
     #[error("transparent background cannot be combined with JPEG output; choose PNG or WebP")]
     TransparentJpeg,
+    #[error("invalid image size '{0}'; use auto or WIDTHxHEIGHT")]
+    InvalidImageSize(String),
+    #[error(
+        "invalid image size {width}x{height}: width and height must be between 16 and {maximum} pixels"
+    )]
+    ImageEdge {
+        width: u32,
+        height: u32,
+        maximum: u32,
+    },
+    #[error(
+        "invalid image size {width}x{height}: width and height must both be divisible by {step}"
+    )]
+    ImageAlignment { width: u32, height: u32, step: u32 },
+    #[error(
+        "invalid image size {width}x{height}: the long edge cannot be more than 3 times the short edge"
+    )]
+    ImageAspectRatio { width: u32, height: u32 },
+    #[error(
+        "invalid image size {width}x{height}: {pixels} total pixels is outside {minimum}–{maximum}"
+    )]
+    ImagePixelCount {
+        width: u32,
+        height: u32,
+        pixels: u64,
+        minimum: u64,
+        maximum: u64,
+    },
     #[error("unsupported {field} value: {value}")]
     UnsupportedValue { field: &'static str, value: String },
 }
@@ -244,15 +380,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_every_phase_three_control_value() {
+    fn parses_every_generation_control_value() {
         assert_eq!("auto".parse(), Ok(ImageSize::Auto));
-        assert_eq!("1024x1024".parse(), Ok(ImageSize::Square));
-        assert_eq!("1024x1536".parse(), Ok(ImageSize::Portrait));
-        assert_eq!("1536x1024".parse(), Ok(ImageSize::Landscape));
+        assert_eq!("1024x1024".parse(), ImageSize::dimensions(1_024, 1_024));
+        assert_eq!("1024x1536".parse(), ImageSize::dimensions(1_024, 1_536));
+        assert_eq!("1536x1024".parse(), ImageSize::dimensions(1_536, 1_024));
+        assert_eq!("3840x2160".parse(), ImageSize::dimensions(3_840, 2_160));
         assert_eq!("high".parse(), Ok(ImageQuality::High));
         assert_eq!("transparent".parse(), Ok(ImageBackground::Transparent));
         assert_eq!("WebP".parse(), Ok(OutputFormat::WebP));
         assert_eq!("JPEG".parse(), Ok(OutputFormat::Jpeg));
+    }
+
+    #[test]
+    fn accepts_every_documented_dimension_boundary() {
+        let minimum = ImageDimensions::new(1_024, 640).expect("minimum pixel count is valid");
+        assert_eq!(minimum.pixel_count(), IMAGE_MIN_PIXELS);
+
+        let maximum = ImageDimensions::new(3_840, 2_160).expect("4K boundary is valid");
+        assert_eq!(maximum.pixel_count(), IMAGE_MAX_PIXELS);
+        assert!(maximum.is_experimental());
+
+        let widest_ratio = ImageDimensions::new(1_536, 512).expect("an exact 3:1 ratio is valid");
+        assert_eq!(widest_ratio.width(), widest_ratio.height() * 3);
+
+        assert!(
+            !ImageDimensions::new(2_048, 1_152)
+                .expect("2K landscape is valid")
+                .is_experimental()
+        );
+    }
+
+    #[test]
+    fn rejects_each_documented_dimension_constraint() {
+        assert!(matches!(
+            ImageDimensions::new(4_096, 1_024),
+            Err(GenerationValidationError::ImageEdge { .. })
+        ));
+        assert!(matches!(
+            ImageDimensions::new(1_000, 1_024),
+            Err(GenerationValidationError::ImageAlignment { .. })
+        ));
+        assert!(matches!(
+            ImageDimensions::new(3_840, 1_024),
+            Err(GenerationValidationError::ImageAspectRatio { .. })
+        ));
+        assert!(matches!(
+            ImageDimensions::new(640, 640),
+            Err(GenerationValidationError::ImagePixelCount { .. })
+        ));
+        assert!(matches!(
+            ImageDimensions::new(3_840, 2_176),
+            Err(GenerationValidationError::ImagePixelCount { .. })
+        ));
     }
 
     #[test]

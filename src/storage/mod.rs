@@ -1,4 +1,3 @@
-use std::ffi::OsString;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,8 +8,10 @@ use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
 use crate::generation::OutputFormat;
+use crate::xdg::{AppPaths, XdgPathError};
 
 static OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const PREVIEW_MAX_EDGE: u32 = 1_600;
 
 struct TemporaryOutput {
     path: PathBuf,
@@ -61,13 +62,15 @@ pub struct SavedImagePreview {
     pub width: u32,
     pub height: u32,
     pub file_size: u64,
-    pub rgba: Vec<u8>,
+    pub preview_width: u32,
+    pub preview_height: u32,
+    pub preview_rgba: Vec<u8>,
 }
 
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("an XDG data directory could not be determined")]
-    OutputDirectoryUnavailable,
+    OutputDirectoryUnavailable(#[from] XdgPathError),
     #[error("image validation or conversion failed: {0}")]
     InvalidImage(#[from] image::ImageError),
     #[error("background image processing task failed: {0}")]
@@ -109,7 +112,14 @@ pub async fn save_with_preview(
         width: prepared.width,
         height: prepared.height,
         file_size: prepared.encoded.len() as u64,
-        rgba: prepared.rgba.unwrap_or_default(),
+        preview_width: prepared.preview.as_ref().map_or(0, |preview| preview.width),
+        preview_height: prepared
+            .preview
+            .as_ref()
+            .map_or(0, |preview| preview.height),
+        preview_rgba: prepared
+            .preview
+            .map_or_else(Vec::new, |preview| preview.rgba),
     })
 }
 
@@ -214,30 +224,21 @@ async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StorageError> {
 }
 
 fn output_directory() -> Result<PathBuf, StorageError> {
-    output_directory_from(std::env::var_os("XDG_DATA_HOME"), std::env::var_os("HOME"))
-}
-
-fn output_directory_from(
-    xdg_data_home: Option<OsString>,
-    home: Option<OsString>,
-) -> Result<PathBuf, StorageError> {
-    let data_home = xdg_data_home
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| {
-            home.map(PathBuf::from)
-                .filter(|path| path.is_absolute())
-                .map(|path| path.join(".local/share"))
-        })
-        .ok_or(StorageError::OutputDirectoryUnavailable)?;
-    Ok(data_home.join("a6-image-studio/outputs"))
+    Ok(AppPaths::discover()?.data_dir().join("outputs"))
 }
 #[derive(Debug)]
 struct PreparedImage {
     encoded: Vec<u8>,
     width: u32,
     height: u32,
-    rgba: Option<Vec<u8>>,
+    preview: Option<PreparedPreview>,
+}
+
+#[derive(Debug)]
+struct PreparedPreview {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
 }
 
 fn prepare_image(
@@ -254,7 +255,7 @@ fn prepare_image(
         image
     };
     let (width, height) = image.dimensions();
-    let rgba = include_preview.then(|| image.to_rgba8().into_raw());
+    let preview = include_preview.then(|| prepare_preview(&image, width, height));
     let encoded = if source_format == desired_format {
         bytes.to_vec()
     } else {
@@ -266,8 +267,22 @@ fn prepare_image(
         encoded,
         width,
         height,
-        rgba,
+        preview,
     })
+}
+
+fn prepare_preview(image: &DynamicImage, width: u32, height: u32) -> PreparedPreview {
+    let preview = if width > PREVIEW_MAX_EDGE || height > PREVIEW_MAX_EDGE {
+        image.thumbnail(PREVIEW_MAX_EDGE, PREVIEW_MAX_EDGE)
+    } else {
+        image.clone()
+    };
+    let (width, height) = preview.dimensions();
+    PreparedPreview {
+        width,
+        height,
+        rgba: preview.to_rgba8().into_raw(),
+    }
 }
 
 fn flatten_transparency_onto_white(image: DynamicImage) -> DynamicImage {
@@ -311,7 +326,7 @@ mod tests {
             image::guess_format(&prepared.encoded).expect("format should be known"),
             ImageFormat::Png
         );
-        assert!(prepared.rgba.is_none());
+        assert!(prepared.preview.is_none());
     }
 
     #[test]
@@ -325,7 +340,29 @@ mod tests {
         let prepared = prepare_image(&encoded.into_inner(), OutputFormat::Png, true)
             .expect("test PNG should validate");
 
-        assert_eq!(prepared.rgba.as_deref().map(<[u8]>::len), Some(2 * 3 * 4));
+        let preview = prepared.preview.expect("preview should be prepared");
+        assert_eq!((preview.width, preview.height), (2, 3));
+        assert_eq!(preview.rgba.len(), 2 * 3 * 4);
+    }
+
+    #[test]
+    fn bounds_large_desktop_previews_without_changing_saved_dimensions() {
+        let image = image::DynamicImage::new_rgba8(3_840, 2_160);
+        let mut encoded = Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, ImageFormat::Png)
+            .expect("test PNG should encode");
+
+        let prepared = prepare_image(&encoded.into_inner(), OutputFormat::Png, true)
+            .expect("large PNG should validate");
+        let preview = prepared.preview.expect("preview should be prepared");
+
+        assert_eq!((prepared.width, prepared.height), (3_840, 2_160));
+        assert_eq!((preview.width, preview.height), (1_600, 900));
+        assert_eq!(
+            preview.rgba.len(),
+            preview.width as usize * preview.height as usize * 4
+        );
     }
 
     #[test]
@@ -334,34 +371,6 @@ mod tests {
             .expect_err("invalid data should fail");
 
         assert!(matches!(error, image::ImageError::Unsupported(_)));
-    }
-
-    #[test]
-    fn uses_absolute_xdg_data_home() {
-        let path = output_directory_from(
-            Some(OsString::from("/tmp/custom-data")),
-            Some(OsString::from("/home/tester")),
-        )
-        .expect("absolute XDG path should be accepted");
-
-        assert_eq!(
-            path,
-            PathBuf::from("/tmp/custom-data/a6-image-studio/outputs")
-        );
-    }
-
-    #[test]
-    fn ignores_relative_xdg_data_home() {
-        let path = output_directory_from(
-            Some(OsString::from("relative-data")),
-            Some(OsString::from("/home/tester")),
-        )
-        .expect("home fallback should be used");
-
-        assert_eq!(
-            path,
-            PathBuf::from("/home/tester/.local/share/a6-image-studio/outputs")
-        );
     }
 
     #[tokio::test]
@@ -450,7 +459,7 @@ mod tests {
     }
 
     #[test]
-    fn converts_png_to_each_phase_three_output_format() {
+    fn converts_png_to_each_supported_output_format() {
         let image = image::DynamicImage::new_rgb8(2, 3);
         let mut png = Cursor::new(Vec::new());
         image
@@ -470,7 +479,10 @@ mod tests {
                 expected
             );
             assert_eq!((prepared.width, prepared.height), (2, 3));
-            assert_eq!(prepared.rgba.as_deref().map(<[u8]>::len), Some(24));
+            assert_eq!(
+                prepared.preview.as_ref().map(|preview| preview.rgba.len()),
+                Some(24)
+            );
         }
     }
 

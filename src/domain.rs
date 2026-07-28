@@ -1,7 +1,6 @@
 //! Application domain types shared by presentation and orchestration code.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::api::ResponseMetadata;
@@ -20,7 +19,6 @@ pub struct GeneratedImage {
     file_size: u64,
     elapsed: Duration,
     response_metadata: ResponseMetadata,
-    preview_rgba: Arc<[u8]>,
     request: GenerationInput,
     output_format: OutputFormat,
 }
@@ -30,7 +28,6 @@ pub(crate) struct PersistedImage {
     pub width: u32,
     pub height: u32,
     pub file_size: u64,
-    pub preview_rgba: Vec<u8>,
     pub output_format: OutputFormat,
 }
 
@@ -48,7 +45,6 @@ impl GeneratedImage {
             file_size: persisted.file_size,
             elapsed,
             response_metadata,
-            preview_rgba: persisted.preview_rgba.into(),
             request,
             output_format: persisted.output_format,
         }
@@ -84,9 +80,5 @@ impl GeneratedImage {
 
     pub fn output_format(&self) -> OutputFormat {
         self.output_format
-    }
-
-    pub(crate) fn preview_rgba(&self) -> &[u8] {
-        &self.preview_rgba
     }
 }

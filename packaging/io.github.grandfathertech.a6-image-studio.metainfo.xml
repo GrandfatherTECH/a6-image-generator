@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.grandfathertech.a6-image-studio</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <name>A6 Image Studio</name>
+  <summary>Generate images through A6API</summary>
+  <description>
+    <p>
+      A6 Image Studio is a Linux desktop and command-line client for generating,
+      previewing, and saving images through an OpenAI-compatible A6API endpoint.
+    </p>
+    <p>
+      The desktop interface supports custom image dimensions, generation quality
+      and format controls, request cancellation, recent previews, and native
+      desktop file actions.
+    </p>
+  </description>
+  <url type="homepage">https://github.com/grandfathertech</url>
+  <launchable type="desktop-id">io.github.grandfathertech.a6-image-studio.desktop</launchable>
+  <provides>
+    <binary>a6-image-studio</binary>
+  </provides>
+  <developer id="io.github.grandfathertech">
+    <name>grandfathertech</name>
+  </developer>
+  <releases>
+    <release version="0.1.0" date="2026-07-28">
+      <description>
+        <p>Phase 4 development preview with a responsive KDE-oriented interface.</p>
+      </description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

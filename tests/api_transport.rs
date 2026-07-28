@@ -271,7 +271,7 @@ async fn generates_from_base64_response() {
 }
 
 #[tokio::test]
-async fn sends_all_configured_phase_three_parameters() {
+async fn sends_all_configured_generation_parameters() {
     let response = MockResponse::json(
         200,
         serde_json::json!({
@@ -284,13 +284,13 @@ async fn sends_all_configured_phase_three_parameters() {
 
     let client = ApiClient::new(test_config(&base_url)).expect("client should build");
     let options = GenerationOptions {
-        size: ImageSize::Portrait,
+        size: ImageSize::dimensions(2_048, 1_152).expect("documented 2K size should be valid"),
         quality: ImageQuality::High,
         background: ImageBackground::Transparent,
         output_format: OutputFormat::WebP,
         ..GenerationOptions::default()
     };
-    let request = ImageGenerationRequest::configured("gpt-image-2", "phase three prompt", &options);
+    let request = ImageGenerationRequest::configured("gpt-image-2", "phase four prompt", &options);
     client
         .generate_image(&request)
         .await
@@ -300,8 +300,8 @@ async fn sends_all_configured_phase_three_parameters() {
     let body: serde_json::Value =
         serde_json::from_slice(&requests[0].body).expect("request should contain JSON");
     assert_eq!(body["model"], "gpt-image-2");
-    assert_eq!(body["prompt"], "phase three prompt");
-    assert_eq!(body["size"], "1024x1536");
+    assert_eq!(body["prompt"], "phase four prompt");
+    assert_eq!(body["size"], "2048x1152");
     assert_eq!(body["quality"], "high");
     assert_eq!(body["background"], "transparent");
     assert_eq!(body["output_format"], "webp");

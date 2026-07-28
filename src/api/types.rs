@@ -7,7 +7,7 @@ pub struct ImageGenerationRequest<'a> {
     pub model: &'a str,
     pub prompt: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<&'a str>,
+    pub size: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -28,7 +28,7 @@ impl<'a> ImageGenerationRequest<'a> {
         Self {
             model,
             prompt,
-            size: Some("1024x1024"),
+            size: Some("1024x1024".to_owned()),
             quality: Some("low"),
             background: None,
             output_format: Some("png"),
