@@ -267,7 +267,7 @@ struct GenerationResult {
 pub fn run() -> Result<(), GuiError> {
     let runtime = build_worker_runtime()?;
     with_runtime_context(&runtime, |runtime_handle| {
-        slint::BackendSelector::new().select()?;
+        select_desktop_backend()?;
         slint::set_xdg_app_id(APP_ID)?;
         let ui = AppWindow::new()?;
         let (backend, initial_state) = load_backend(&ui);
@@ -278,6 +278,42 @@ pub fn run() -> Result<(), GuiError> {
         ui.run()?;
         Ok(())
     })
+}
+
+fn select_desktop_backend() -> Result<(), slint::PlatformError> {
+    if let Some(requested) = std::env::var("SLINT_BACKEND")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        tracing::info!(backend = %requested, "honoring explicit Slint backend selection");
+        return slint::BackendSelector::new().select();
+    }
+
+    match slint::BackendSelector::new()
+        .backend_name("winit".to_owned())
+        .select()
+    {
+        Ok(()) => {
+            tracing::info!("using the preferred Winit desktop backend");
+            Ok(())
+        }
+        Err(winit_error) => {
+            tracing::warn!(
+                %winit_error,
+                "Winit could not be initialized; trying the Qt fallback"
+            );
+            slint::BackendSelector::new()
+                .backend_name("qt".to_owned())
+                .select()
+                .map_err(|qt_error| {
+                    format!(
+                        "neither preferred Winit nor fallback Qt could be initialized \
+                         (Winit: {winit_error}; Qt: {qt_error})"
+                    )
+                    .into()
+                })
+        }
+    }
 }
 
 fn build_worker_runtime() -> Result<Runtime, GuiError> {
@@ -688,6 +724,12 @@ async fn generate(
     let generated = backend.client.generate_image(&request).await?;
     let output_format = input.options().output_format;
     let saved = storage::save_with_preview(generated.bytes, output_format).await?;
+    warn_if_dimensions_mismatch(
+        &input,
+        saved.width,
+        saved.height,
+        generated.metadata.request_id.as_deref(),
+    );
     let pixels = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
         &saved.preview_rgba,
         saved.preview_width,
@@ -821,7 +863,14 @@ fn present_state(ui: &AppWindow, state: &ApplicationState) {
             ..
         } => {
             ui.set_busy(false);
-            ui.set_connection_status("Image generated".into());
+            ui.set_connection_status(
+                if image.dimensions_match_request() == Some(false) {
+                    "Image generated · size mismatch"
+                } else {
+                    "Image generated"
+                }
+                .into(),
+            );
             ui.set_error_text(SharedString::default());
             ui.set_result_details(SharedString::default());
             present_generated_image(ui, image);
@@ -865,17 +914,61 @@ fn present_generated_image(ui: &AppWindow, image: &GeneratedImage) {
             .unwrap_or("Not provided")
             .into(),
     );
+    ui.set_result_size_warning(dimension_integrity_warning(image).into());
 }
 
 fn generation_settings_text(options: &GenerationOptions) -> String {
     let compatibility = options.compatibility;
     format!(
-        "Dimensions {}  ·  Quality {}  ·  Background {}  ·  API format {}",
+        "Requested dimensions {}  ·  Quality {}  ·  Background {}  ·  API format {}",
         request_parameter(compatibility.send_size, options.size),
         request_parameter(compatibility.send_quality, options.quality),
         request_parameter(compatibility.send_background, options.background),
         request_parameter(compatibility.send_output_format, options.output_format),
     )
+}
+
+fn warn_if_dimensions_mismatch(
+    input: &GenerationInput,
+    received_width: u32,
+    received_height: u32,
+    request_id: Option<&str>,
+) {
+    let options = input.options();
+    let requested = options
+        .compatibility
+        .send_size
+        .then(|| options.size.explicit_dimensions())
+        .flatten();
+    if let Some(requested) = requested
+        && (requested.width(), requested.height()) != (received_width, received_height)
+    {
+        tracing::warn!(
+            requested_width = requested.width(),
+            requested_height = requested.height(),
+            received_width,
+            received_height,
+            request_id,
+            "gateway returned image dimensions that do not match the request"
+        );
+    }
+}
+
+fn dimension_integrity_warning(image: &GeneratedImage) -> String {
+    match (
+        image.requested_dimensions(),
+        image.dimensions_match_request(),
+    ) {
+        (Some(requested), Some(false)) => format!(
+            "Size mismatch: requested {}×{}, but the gateway returned {}×{}. \
+             The paid response was saved unchanged; no stretching or artificial upscaling was applied.",
+            requested.width(),
+            requested.height(),
+            image.width(),
+            image.height()
+        ),
+        _ => String::new(),
+    }
 }
 
 fn request_parameter(enabled: bool, value: impl fmt::Display) -> String {
@@ -997,8 +1090,52 @@ mod tests {
 
         assert_eq!(
             generation_settings_text(&options),
-            "Dimensions 2048x1152  ·  Quality omitted  ·  Background auto  ·  API format PNG"
+            "Requested dimensions 2048x1152  ·  Quality omitted  ·  Background auto  ·  API format PNG"
         );
+    }
+
+    #[test]
+    fn reports_a_gateway_dimension_mismatch_without_claiming_the_requested_size() {
+        let options = GenerationOptions {
+            size: ImageSize::dimensions(3_840, 2_160).expect("test size should be valid"),
+            ..GenerationOptions::default()
+        };
+        let image = GeneratedImage::new(
+            PersistedImage {
+                path: PathBuf::from("/tmp/mismatched.jpg"),
+                width: 1_402,
+                height: 1_122,
+                file_size: 275_235,
+                output_format: OutputFormat::Jpeg,
+            },
+            Duration::from_secs(219),
+            ResponseMetadata::default(),
+            GenerationInput::new("test prompt", options)
+                .expect("test generation input should be valid"),
+        );
+
+        assert_eq!(image.dimensions_match_request(), Some(false));
+        let warning = dimension_integrity_warning(&image);
+        assert!(warning.contains("requested 3840×2160"));
+        assert!(warning.contains("returned 1402×1122"));
+        assert!(warning.contains("saved unchanged"));
+    }
+
+    #[test]
+    fn omitting_or_automatically_selecting_size_has_no_integrity_warning() {
+        let mut options = GenerationOptions {
+            size: ImageSize::Auto,
+            ..GenerationOptions::default()
+        };
+        let auto = generated_image_with_options(options.clone());
+        assert_eq!(auto.dimensions_match_request(), None);
+        assert!(dimension_integrity_warning(&auto).is_empty());
+
+        options.size = ImageSize::dimensions(1_024, 1_024).expect("test size should be valid");
+        options.compatibility.send_size = false;
+        let omitted = generated_image_with_options(options);
+        assert_eq!(omitted.dimensions_match_request(), None);
+        assert!(dimension_integrity_warning(&omitted).is_empty());
     }
 
     #[test]
@@ -1061,6 +1198,22 @@ mod tests {
             image,
             pixels: SharedPixelBuffer::new(1, 1),
         }
+    }
+
+    fn generated_image_with_options(options: GenerationOptions) -> GeneratedImage {
+        GeneratedImage::new(
+            PersistedImage {
+                path: PathBuf::from("/tmp/generated.png"),
+                width: 1_254,
+                height: 1_254,
+                file_size: 24,
+                output_format: OutputFormat::Png,
+            },
+            Duration::from_millis(250),
+            ResponseMetadata::default(),
+            GenerationInput::new("test prompt", options)
+                .expect("test generation input should be valid"),
+        )
     }
 
     #[tokio::test]

@@ -284,7 +284,7 @@ async fn sends_all_configured_generation_parameters() {
 
     let client = ApiClient::new(test_config(&base_url)).expect("client should build");
     let options = GenerationOptions {
-        size: ImageSize::dimensions(2_048, 1_152).expect("documented 2K size should be valid"),
+        size: ImageSize::dimensions(3_840, 2_160).expect("documented 4K size should be valid"),
         quality: ImageQuality::High,
         background: ImageBackground::Transparent,
         output_format: OutputFormat::WebP,
@@ -301,7 +301,7 @@ async fn sends_all_configured_generation_parameters() {
         serde_json::from_slice(&requests[0].body).expect("request should contain JSON");
     assert_eq!(body["model"], "gpt-image-2");
     assert_eq!(body["prompt"], "phase four prompt");
-    assert_eq!(body["size"], "2048x1152");
+    assert_eq!(body["size"], "3840x2160");
     assert_eq!(body["quality"], "high");
     assert_eq!(body["background"], "transparent");
     assert_eq!(body["output_format"], "webp");

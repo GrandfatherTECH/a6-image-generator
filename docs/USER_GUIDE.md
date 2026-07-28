@@ -51,7 +51,7 @@ The compact header displays the normalized endpoint, masked API key, configured 
 
 `Test connection` calls the models endpoint and reports its HTTP status and whether the configured model is listed. A model missing from that list does not necessarily mean image generation is unavailable.
 
-`Generate image` is a potentially billable action. While the request is active, the connection and generation buttons are disabled, a busy indicator is visible, and `Cancel` aborts the active asynchronous task. A cancelled or superseded operation cannot later replace the visible state.
+`Generate image` is a potentially billable action. While the request is active, the connection and generation buttons are disabled, one busy indicator is visible beside the generation controls, and `Cancel` aborts the active asynchronous task. The preview canvas does not show a duplicate spinner. A cancelled or superseded operation cannot later replace the visible state.
 
 ### Generation controls
 
@@ -90,9 +90,29 @@ The interface displays the pixel count and aspect ratio for valid custom sizes. 
 
 The direct OpenAI `gpt-image-2` endpoint currently documents transparent backgrounds as unsupported. The control remains available for A6API or other compatible gateways; disable the background field under compatibility settings if the configured gateway rejects it.
 
+#### Requested and received dimensions
+
+When an explicit size is enabled, the client sends that exact `WIDTHxHEIGHT`
+string in the JSON `size` field. After the response is decoded, the client
+compares the real raster dimensions with the request:
+
+- A matching result is accepted normally.
+- A mismatch is saved at the dimensions actually returned by the gateway and
+  shown with a prominent `Size mismatch` warning.
+- The request details distinguish the requested dimensions from the actual
+  dimensions displayed above the preview.
+- The client never silently stretches, crops, or artificially upscales a paid
+  response.
+
+For example, if a gateway returns `1402×1122` for a sent `3840x2160` request,
+the saved file remains `1402×1122` and the warning reports both values. This is
+a gateway/model compatibility failure rather than preview downscaling: display
+previews are separately bounded in memory, but the durable file retains the
+decoded response dimensions.
+
 ### Compatibility settings
 
-Expand the compact `Compatibility settings` row to control whether the request sends `size`, `quality`, `background`, and `output_format`. The switches use an aligned two-column layout, and all four are enabled for the target `gpt-image-2` workflow by default.
+Expand the compact, fixed-height `Compatibility settings` control to choose whether the request sends `size`, `quality`, `background`, and `output_format`. The control no longer stretches when expanded; the switches use an aligned two-column layout, and all four are enabled for the target `gpt-image-2` workflow by default.
 
 If A6API or a configured compatible model rejects one parameter:
 
@@ -107,7 +127,7 @@ The corresponding normal control is hidden while its parameter is disabled. The 
 
 Successful output is validated, atomically saved, and shown in the large preview canvas. Up to six successful images are retained as an in-memory `Recent this session` strip; selecting a thumbnail changes the preview and metadata, and makes file actions and Regenerate target that result. This strip is cleared when the program exits and does not yet create persistent history.
 
-Expand `Request details` to inspect the successful prompt and sent/omitted options together with request duration, image dimensions, encoded file size, output format, exact path, and request ID when supplied.
+Expand `Request details` to inspect the successful prompt and sent/omitted options together with request duration, actual image dimensions, encoded file size, output format, exact path, and request ID when supplied. The details region has bounded rows and clipping so long prompts and paths cannot draw beyond its border.
 
 - `Save As…` opens the desktop portal file dialog and writes an atomic copy. Keep the selected format's extension.
 - `Copy image` sends the encoded file to the desktop clipboard. On Linux this uses `wl-copy` on Wayland or `xclip` on X11 when available.
@@ -175,7 +195,7 @@ Authentication headers are never logged. Error responses are parsed when structu
 
 ## Desktop troubleshooting
 
-A6 Image Studio includes Slint's Qt and Winit backends. On systems where Qt was available at build time, the default UI uses Qt styling; Winit remains available as a Wayland/X11 fallback. Force the Winit software renderer with:
+A6 Image Studio compiles Slint's Winit Wayland and X11 integrations plus the Qt backend. With no override, startup tries Winit first; Winit uses the active Wayland or X11 display. Qt is attempted only if Winit cannot initialize. Force the Winit software renderer with:
 
 ```bash
 SLINT_BACKEND=winit-software cargo run
@@ -186,6 +206,9 @@ To require Qt explicitly:
 ```bash
 SLINT_BACKEND=qt cargo run
 ```
+
+Any non-empty `SLINT_BACKEND` value is treated as an explicit override rather
+than being replaced by the automatic Winit-first policy.
 
 Run from a terminal with `RUST_LOG=info` to retain sanitized startup and transport diagnostics. A startup error about `A6API_KEY` means the variable was not exported into the environment of the launched process.
 

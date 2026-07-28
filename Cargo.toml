@@ -13,7 +13,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 rfd = { version = "0.16", default-features = false, features = ["async-std", "wayland", "xdg-portal"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-slint = { version = "=1.17.1", default-features = false, features = ["accessibility", "backend-qt", "backend-winit", "compat-1-2", "renderer-femtovg", "renderer-software", "std"] }
+slint = { version = "=1.17.1", default-features = false, features = ["accessibility", "backend-qt", "backend-winit", "backend-winit-wayland", "backend-winit-x11", "compat-1-2", "renderer-femtovg", "renderer-software", "std"] }
 thiserror = "2.0"
 tokio = { version = "1.47", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "time"] }
 tracing = "0.1"

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::api::ResponseMetadata;
-use crate::generation::{GenerationInput, OutputFormat};
+use crate::generation::{GenerationInput, ImageDimensions, OutputFormat};
 
 /// A validated image that was generated, persisted, and prepared for preview.
 ///
@@ -80,5 +80,23 @@ impl GeneratedImage {
 
     pub fn output_format(&self) -> OutputFormat {
         self.output_format
+    }
+
+    /// Returns the exact dimensions sent to the gateway, when the request
+    /// included an explicit `size` field.
+    pub fn requested_dimensions(&self) -> Option<ImageDimensions> {
+        self.request()
+            .options()
+            .compatibility
+            .send_size
+            .then(|| self.request().options().size.explicit_dimensions())
+            .flatten()
+    }
+
+    /// Reports whether a gateway response honored an explicitly requested
+    /// size. `None` means that the request used `auto` or omitted `size`.
+    pub fn dimensions_match_request(&self) -> Option<bool> {
+        self.requested_dimensions()
+            .map(|requested| requested.width() == self.width && requested.height() == self.height)
     }
 }

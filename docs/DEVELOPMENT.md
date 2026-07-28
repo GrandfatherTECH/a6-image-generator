@@ -2,7 +2,7 @@
 
 ## Scope and phase discipline
 
-The repository currently implements Phase 4. The permanent CLI, manually verified generation workflow, explicit state architecture, typed controls, format-aware persistence, and result actions from earlier phases remain supported. Phase 4 adds arbitrary validated dimensions, a KDE-oriented responsive interface, bounded in-memory recent previews, standard XDG identity and paths, Qt-first styling with Winit fallback, and Linux desktop metadata.
+The repository currently implements Phase 4 plus its reviewed UI and response-integrity fixes. The permanent CLI, manually verified generation workflow, explicit state architecture, typed controls, format-aware persistence, and result actions from earlier phases remain supported. Phase 4 adds arbitrary validated dimensions, a KDE-oriented responsive interface, bounded in-memory recent previews, standard XDG identity and paths, Winit-first Wayland/X11 execution with Qt fallback, and Linux desktop metadata.
 
 The command-line interface is a permanent application surface, not throwaway probe code. Future GUI code should call the library modules rather than duplicate configuration or HTTP behavior.
 
@@ -42,6 +42,15 @@ Generation responses are decoded in this order:
 
 Image validation and format conversion run through `tokio::task::spawn_blocking`. PNG, WebP, and JPEG output are supported. JPEG conversion flattens alpha onto white. The desktop save path also obtains RGBA preview pixels during that same decode pass. Preview dimensions are bounded to a 1600-pixel maximum edge, while the encoded durable output retains its actual dimensions. A `SharedPixelBuffer` is built on a Tokio worker, then the inexpensive Slint `Image` handle is created on the UI event loop.
 
+After decoding, `GeneratedImage::dimensions_match_request` compares the actual
+raster with an explicitly sent non-`auto` size. The comparison deliberately
+occurs against decoded pixels rather than response claims or preview dimensions.
+A mismatch remains a successful, durable result because discarding a paid
+response would cause data loss, but presentation marks it prominently and logs
+only the requested/received dimensions and optional request ID. The client does
+not stretch, crop, or upscale the response because that would hide gateway
+nonconformance and cannot recreate missing native detail.
+
 Output is written to a uniquely named hidden temporary file in the destination directory. The file is fully written, flushed, and synchronized before a same-directory rename exposes the final image. Failures attempt to remove the temporary file, so readers do not observe partial final output. Save As reuses the same atomic write path.
 
 ## Desktop execution model
@@ -67,9 +76,16 @@ Result actions are independent of the generation state machine:
 - Folder opening invokes `xdg-open` directly without a shell.
 - All action completion text returns through `upgrade_in_event_loop`.
 
-The Slint root uses a `ScrollView` whose viewport height follows the content's minimum height. The content keeps a natural layout while the viewport shrinks, preventing lower controls from becoming unreachable. At 900 logical pixels the main workspace changes between side-by-side and stacked panels. Reusable Slint components keep the behavior and two-way bindings identical in both layouts. Colors come from `Palette`, native controls retain system focus treatment, and the UI adds no custom font family, gradients, glow, or decorative motion.
+The Slint root uses a `ScrollView` whose viewport height follows the content's minimum height. The content keeps a natural layout while the viewport shrinks, preventing lower controls from becoming unreachable. At 900 logical pixels the main workspace changes between side-by-side and stacked panels. Reusable Slint components keep the behavior and two-way bindings identical in both layouts. The compatibility expander has an explicit native-control height so Winit cannot stretch it into the available layout space. Request-detail rows use explicit bounded heights inside a clipped card. Only the generation-controls row owns an indeterminate spinner; the canvas uses static progress copy. Colors come from `Palette`, native controls retain system focus treatment, and the UI adds no custom font family, gradients, glow, or decorative motion.
 
-`backend-qt` and `backend-winit` are both compiled. Slint selects Qt first when native Qt support was found at build time and otherwise uses Winit; `SLINT_BACKEND` can explicitly select `qt`, `winit-femtovg`, or `winit-software`. Wayland and X11 support remain enabled through Winit. The Qt dependency is optional at Slint's build-detection level, so source builds without a usable Qt development installation still retain the Winit path.
+`backend-winit-wayland`, `backend-winit-x11`, and `backend-qt` are compiled.
+Unless `SLINT_BACKEND` is explicitly set, `select_desktop_backend` requests
+Winit first and tries Qt only if Winit initialization fails. Winit chooses the
+active Wayland or X11 display and can use the femtovg or software renderer.
+`SLINT_BACKEND` can explicitly select `qt`, `winit-femtovg`, or
+`winit-software`; explicit selection errors are returned rather than silently
+changing the requested backend. The Qt dependency remains optional at Slint's
+build-detection level.
 
 `AppPaths` follows XDG environment variables with absolute-path validation and home-directory fallbacks. Durable generated files live below the data directory, Save As starts in the user pictures directory, and the configuration/cache paths are exposed for later phases without writing persistent state in Phase 4.
 
@@ -91,7 +107,7 @@ cargo test --all-targets
 cargo build --release --locked
 ```
 
-Tests use a bounded local HTTP mock server and must not use the real gateway or require `A6API_KEY`. Unit tests cover URL normalization, key masking, endpoint construction, Base64/URL parsing, malformed responses, structured/non-JSON errors, documented dimension boundaries, optional-field omission, bounded previews, XDG discovery, recent-result selection, PNG/WebP/JPEG conversion, Save As extension checks, all state transitions, worker abortion, stale-result rejection, and atomic output commits. Integration tests verify request paths, arbitrary custom size serialization, all generation JSON fields, bearer authentication, response metadata, error categorization, and URL fallback transport.
+Tests use a bounded local HTTP mock server and must not use the real gateway or require `A6API_KEY`. Unit tests cover URL normalization, key masking, endpoint construction, Base64/URL parsing, malformed responses, structured/non-JSON errors, documented dimension boundaries, requested/received dimension mismatch reporting, optional-field omission, bounded previews, XDG discovery, recent-result selection, PNG/WebP/JPEG conversion, Save As extension checks, all state transitions, worker abortion, stale-result rejection, and atomic output commits. Integration tests verify request paths, exact `3840x2160` serialization, all generation JSON fields, bearer authentication, response metadata, error categorization, and URL fallback transport.
 
 Validate the freedesktop assets as well:
 
@@ -118,14 +134,14 @@ Phase 5 adds secure settings and persistent optional history. Later phases compl
 
 ## Phase 4 manual test checklist
 
-1. Start under KDE Wayland with `cargo run`. Verify Qt-native controls and the system palette, then repeat with `SLINT_BACKEND=winit-software cargo run` to confirm the fallback.
+1. Start under KDE Wayland with `RUST_LOG=info cargo run`. Verify the log reports the preferred Winit backend and the interface uses the system palette. Repeat in an X11 session where available. Run `SLINT_BACKEND=qt cargo run` only to verify the fallback/override.
 2. Resize across the 900-pixel responsive breakpoint and down to minimum width/height. Verify side-by-side panels become stacked and the scrollbar reaches every control and action.
 3. Confirm the compact header shows only a masked key and normalized endpoint, then run `Test connection`.
-4. Expand compatibility settings. Verify the compact expander does not fill the card and all four switches align in two columns.
+4. Expand compatibility settings. Verify the compact expander remains exactly one control row tall, does not stretch vertically, and all four switches align in two columns.
 5. Open Dimensions and inspect every preset. Choose `Custom…`; test a valid custom size, a non-16-pixel edge, a ratio over 3:1, and pixel counts below/above the limits. Invalid input must be rejected before network access.
-6. Generate one low-quality `1024x1024` PNG. Verify responsiveness, preview, collapsed request details, exact metadata, and absence of leftover `.tmp` files.
+6. Generate one low-quality `1024x1024` PNG. Verify there is exactly one spinner beside the generation controls, no spinner on the canvas, responsiveness, preview, collapsed request details, exact metadata, and absence of leftover `.tmp` files.
 7. If charges are acceptable, generate several different sizes/formats. Verify up to six recent thumbnails appear, selecting an older one updates preview/metadata/action target, and a seventh removes the oldest.
-8. Test a 4K request only if the provider supports it and the charge is acceptable. Verify the saved file remains 3840×2160 while preview memory remains bounded.
+8. Test a 4K request only if the provider supports it and the charge is acceptable. If the gateway returns 3840×2160, verify the saved file remains exact while preview memory is bounded. If it returns another raster, verify the prominent warning states both requested and received dimensions and the actual file is preserved unchanged.
 9. Select transparent background with JPEG and verify local rejection. For direct OpenAI `gpt-image-2`, expect transparent background itself to be unsupported; A6API compatibility may differ.
 10. Test Save As (defaulting to Pictures), Copy image, Copy prompt, Open folder, and Regenerate. Remember that Regenerate is billable.
 11. Cancel an active generation, then start a connection test. Verify no late result replaces the newer state.
