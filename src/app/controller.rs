@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use thiserror::Error;
-use tokio::runtime::{Builder, Handle};
+use tokio::runtime::{Builder, Handle, Runtime};
 use tokio::task::AbortHandle;
 
 use super::actions;
@@ -189,19 +189,33 @@ struct GenerationResult {
 }
 
 pub fn run() -> Result<(), GuiError> {
-    let runtime = Builder::new_multi_thread()
+    let runtime = build_worker_runtime()?;
+    with_runtime_context(&runtime, |runtime_handle| {
+        let ui = AppWindow::new()?;
+        let (backend, initial_state) = load_backend(&ui);
+        let operations = OperationControl::new(initial_state);
+        let results = ResultStore::default();
+        present_state(&ui, &operations.state());
+        bind_callbacks(&ui, runtime_handle, backend, operations, results);
+        ui.run()?;
+        Ok(())
+    })
+}
+
+fn build_worker_runtime() -> Result<Runtime, GuiError> {
+    Builder::new_multi_thread()
         .enable_all()
         .thread_name("a6-image-worker")
         .build()
-        .map_err(GuiError::Runtime)?;
-    let ui = AppWindow::new()?;
-    let (backend, initial_state) = load_backend(&ui);
-    let operations = OperationControl::new(initial_state);
-    let results = ResultStore::default();
-    present_state(&ui, &operations.state());
-    bind_callbacks(&ui, runtime.handle().clone(), backend, operations, results);
-    ui.run()?;
-    Ok(())
+        .map_err(GuiError::Runtime)
+}
+
+fn with_runtime_context<T>(runtime: &Runtime, action: impl FnOnce(Handle) -> T) -> T {
+    // Slint owns and polls its main-thread event loop. Keep a Tokio reactor
+    // entered on that thread as well: Linux integrations can acquire Tokio
+    // through Cargo feature unification even when our own work uses handles.
+    let _runtime_context = runtime.enter();
+    action(runtime.handle().clone())
 }
 
 fn load_backend(ui: &AppWindow) -> (Result<Backend, String>, ApplicationState) {
@@ -771,6 +785,20 @@ mod tests {
         assert_eq!(format_duration(Duration::from_millis(1_250)), "1.25 s");
         assert_eq!(format_file_size(512), "512 bytes");
         assert_eq!(format_file_size(2_048), "2.0 KiB (2048 bytes)");
+    }
+
+    #[test]
+    fn gui_event_loop_scope_has_a_tokio_reactor() {
+        let runtime = build_worker_runtime().expect("worker runtime should build");
+
+        let value = with_runtime_context(&runtime, |_| {
+            let task = tokio::task::spawn_blocking(|| 42);
+            runtime
+                .block_on(task)
+                .expect("blocking task should run in the entered runtime")
+        });
+
+        assert_eq!(value, 42);
     }
 
     #[tokio::test]

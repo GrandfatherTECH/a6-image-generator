@@ -43,7 +43,7 @@ Output is written to a uniquely named hidden temporary file in the destination d
 
 ## Desktop execution model
 
-`app::run` creates the Slint component on the main thread and a separate multi-thread Tokio runtime for background work. Slint callbacks only validate input, transition application state, update immediate UI properties, and spawn work. They never await network, decoding, or filesystem operations. A single configured `ApiClient` is created at startup and cheaply cloned for both connectivity and generation operations.
+`app::run` creates a separate multi-thread Tokio runtime for background work, enters its reactor context on the main thread, and then creates and runs the Slint component there. Keeping the reactor entered for the lifetime of the Slint event loop is important because Linux desktop integrations may acquire Tokio-backed `zbus` behavior through Cargo feature unification even when Slint polls their futures itself. Slint callbacks only validate input, transition application state, update immediate UI properties, and spawn work. They never await network, decoding, or filesystem operations. A single configured `ApiClient` is created at startup and cheaply cloned for both connectivity and generation operations.
 
 `StateMachine` is the source of truth for the explicit `Idle`, `Connecting`, `Generating`, `Success`, `Cancelled`, and `Error` states. Each async operation receives a typed `OperationId`. `OperationControl` couples that state machine to the active Tokio `AbortHandle`; cancellation enters `Cancelled` before aborting the worker. A completion is accepted only if its ID still belongs to the active connecting or generating state, so a cancelled or superseded request cannot overwrite newer UI state.
 
@@ -55,7 +55,10 @@ The desktop request uses `ImageGenerationRequest::configured`. The permanent CLI
 
 Result actions are independent of the generation state machine:
 
-- `rfd` provides an asynchronous XDG portal Save As dialog.
+- `rfd` provides an asynchronous XDG portal Save As dialog. Its async-std feature deliberately
+  keeps the shared Linux `zbus` dependency on the async-io backend used by Slint and AccessKit;
+  enabling `rfd`'s Tokio feature would switch that shared dependency globally and make
+  Slint-owned threads require a Tokio reactor.
 - Save As copies the accepted durable file through `storage::copy_atomic`.
 - Clipboard writes run in blocking workers and invoke `wl-copy` or `xclip` directly without a shell.
 - Folder opening invokes `xdg-open` directly without a shell.
