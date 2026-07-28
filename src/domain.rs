@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::api::ResponseMetadata;
+use crate::generation::{GenerationInput, OutputFormat};
 
 /// A validated image that was generated, persisted, and prepared for preview.
 ///
@@ -20,26 +21,36 @@ pub struct GeneratedImage {
     elapsed: Duration,
     response_metadata: ResponseMetadata,
     preview_rgba: Arc<[u8]>,
+    request: GenerationInput,
+    output_format: OutputFormat,
+}
+
+pub(crate) struct PersistedImage {
+    pub path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    pub file_size: u64,
+    pub preview_rgba: Vec<u8>,
+    pub output_format: OutputFormat,
 }
 
 impl GeneratedImage {
     pub(crate) fn new(
-        path: PathBuf,
-        width: u32,
-        height: u32,
-        file_size: u64,
+        persisted: PersistedImage,
         elapsed: Duration,
         response_metadata: ResponseMetadata,
-        preview_rgba: Vec<u8>,
+        request: GenerationInput,
     ) -> Self {
         Self {
-            path,
-            width,
-            height,
-            file_size,
+            path: persisted.path,
+            width: persisted.width,
+            height: persisted.height,
+            file_size: persisted.file_size,
             elapsed,
             response_metadata,
-            preview_rgba: preview_rgba.into(),
+            preview_rgba: persisted.preview_rgba.into(),
+            request,
+            output_format: persisted.output_format,
         }
     }
 
@@ -65,6 +76,14 @@ impl GeneratedImage {
 
     pub fn response_metadata(&self) -> &ResponseMetadata {
         &self.response_metadata
+    }
+
+    pub fn request(&self) -> &GenerationInput {
+        &self.request
+    }
+
+    pub fn output_format(&self) -> OutputFormat {
+        self.output_format
     }
 
     pub(crate) fn preview_rgba(&self) -> &[u8] {

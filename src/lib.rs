@@ -4,6 +4,7 @@ pub mod api;
 pub mod app;
 pub mod config;
 pub mod domain;
+pub mod generation;
 pub mod storage;
 
 slint::include_modules!();

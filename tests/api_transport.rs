@@ -4,6 +4,9 @@ use std::time::Duration;
 
 use a6_image_studio::api::{ApiClient, ApiError, HttpFailure, ImageGenerationRequest};
 use a6_image_studio::config::Config;
+use a6_image_studio::generation::{
+    GenerationOptions, ImageBackground, ImageQuality, ImageSize, OutputFormat,
+};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -265,6 +268,43 @@ async fn generates_from_base64_response() {
     assert_eq!(body["size"], "1024x1024");
     assert_eq!(body["quality"], "low");
     assert_eq!(body["output_format"], "png");
+}
+
+#[tokio::test]
+async fn sends_all_configured_phase_three_parameters() {
+    let response = MockResponse::json(
+        200,
+        serde_json::json!({
+            "data": [{"b64_json": STANDARD.encode(b"image bytes")}]
+        }),
+    );
+    let (base_url, server) = start_mock_server(vec![response])
+        .await
+        .expect("mock server should start");
+
+    let client = ApiClient::new(test_config(&base_url)).expect("client should build");
+    let options = GenerationOptions {
+        size: ImageSize::Portrait,
+        quality: ImageQuality::High,
+        background: ImageBackground::Transparent,
+        output_format: OutputFormat::WebP,
+        ..GenerationOptions::default()
+    };
+    let request = ImageGenerationRequest::configured("gpt-image-2", "phase three prompt", &options);
+    client
+        .generate_image(&request)
+        .await
+        .expect("generation response should decode");
+    let requests = finish_server(server).await;
+
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("request should contain JSON");
+    assert_eq!(body["model"], "gpt-image-2");
+    assert_eq!(body["prompt"], "phase three prompt");
+    assert_eq!(body["size"], "1024x1536");
+    assert_eq!(body["quality"], "high");
+    assert_eq!(body["background"], "transparent");
+    assert_eq!(body["output_format"], "webp");
 }
 
 #[tokio::test]

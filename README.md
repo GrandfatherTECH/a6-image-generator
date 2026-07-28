@@ -1,18 +1,22 @@
 # A6 Image Studio
 
-A6 Image Studio is a Linux desktop and command-line image-generation client for the A6API OpenAI-compatible gateway. The project is being built in reviewable phases. Phase 2 strengthens the architecture behind the deliberately minimal Slint interface proven in Phase 1.
+A6 Image Studio is a Linux desktop and command-line image-generation client for the A6API OpenAI-compatible gateway. The project is being built in reviewable phases. Phase 3 adds validated generation controls and practical result actions to the architecture established in Phase 2.
 
 ## Current capabilities
 
 - Validate environment-based A6API configuration without exposing the API key.
 - Check `/v1/models` and report authentication, rate-limit, server, timeout, DNS, and TLS failures.
 - Make one explicitly confirmed, billable `gpt-image-2` smoke generation.
-- Accept either Base64 or URL image responses, validate the image, convert it to PNG when needed, and store it under the XDG data directory.
+- Accept either Base64 or URL image responses, validate them, convert desktop output to the selected PNG/WebP/JPEG format, and store it under the XDG data directory.
 - Capture request ID, retry, and rate-limit response headers when present.
-- Launch a responsive Slint desktop window for connection testing and fixed-setting image generation.
+- Launch a responsive, vertically scrollable Slint desktop window for connection testing and image generation.
+- Select the supported size, quality, background, and PNG/WebP/JPEG output options.
+- Omit individual optional request fields through compatibility settings when a gateway rejects them.
 - Cancel an active GUI request and preview a generated image without decoding it on the UI thread.
 - Track idle, connecting, generating, success, cancelled, and error states explicitly.
 - Reject stale async completions and atomically commit generated output files.
+- Save a generated result under another name, copy the image or prompt, regenerate the exact request, and open its containing folder.
+- Display request duration, dimensions, encoded file size, format, path, and request ID.
 
 ## Quick start
 
@@ -44,4 +48,4 @@ See the [user guide](docs/USER_GUIDE.md) for configuration, desktop controls, an
 
 ## Project status
 
-Phase 2 is implemented and awaits its focused manual regression check. Image controls and the final KDE-oriented visual design remain intentionally deferred to their specified phases.
+Phase 3 is implemented and awaits its focused manual regression check. Image editing remains out of scope, and the final KDE-oriented visual redesign is intentionally deferred to Phase 4.

@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use image::{GenericImageView, ImageFormat};
+use image::{DynamicImage, GenericImageView, ImageFormat, Rgb, RgbImage};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
+
+use crate::generation::OutputFormat;
 
 static OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -81,39 +83,63 @@ pub enum StorageError {
 }
 
 pub async fn save_png(bytes: Vec<u8>) -> Result<SavedImage, StorageError> {
-    let prepared = tokio::task::spawn_blocking(move || prepare_png(&bytes, false)).await??;
-    let path = write_png(&prepared.png, "smoke-test").await?;
+    let prepared =
+        tokio::task::spawn_blocking(move || prepare_image(&bytes, OutputFormat::Png, false))
+            .await??;
+    let path = write_output(&prepared.encoded, "smoke-test", OutputFormat::Png).await?;
 
     Ok(SavedImage {
         path,
         width: prepared.width,
         height: prepared.height,
-        file_size: prepared.png.len() as u64,
+        file_size: prepared.encoded.len() as u64,
     })
 }
 
-pub async fn save_png_with_preview(bytes: Vec<u8>) -> Result<SavedImagePreview, StorageError> {
-    let prepared = tokio::task::spawn_blocking(move || prepare_png(&bytes, true)).await??;
-    let path = write_png(&prepared.png, "generated").await?;
+pub async fn save_with_preview(
+    bytes: Vec<u8>,
+    output_format: OutputFormat,
+) -> Result<SavedImagePreview, StorageError> {
+    let prepared =
+        tokio::task::spawn_blocking(move || prepare_image(&bytes, output_format, true)).await??;
+    let path = write_output(&prepared.encoded, "generated", output_format).await?;
 
     Ok(SavedImagePreview {
         path,
         width: prepared.width,
         height: prepared.height,
-        file_size: prepared.png.len() as u64,
+        file_size: prepared.encoded.len() as u64,
         rgba: prepared.rgba.unwrap_or_default(),
     })
 }
 
-async fn write_png(png: &[u8], filename_prefix: &str) -> Result<PathBuf, StorageError> {
-    let output_dir = output_directory()?;
-    write_png_in(&output_dir, png, filename_prefix).await
+pub async fn copy_atomic(source: &Path, destination: &Path) -> Result<(), StorageError> {
+    if source == destination {
+        return Ok(());
+    }
+    let bytes = tokio::fs::read(source)
+        .await
+        .map_err(|source_error| StorageError::Io {
+            path: source.to_owned(),
+            source: source_error,
+        })?;
+    write_atomic(destination, &bytes).await
 }
 
-async fn write_png_in(
-    output_dir: &Path,
-    png: &[u8],
+async fn write_output(
+    encoded: &[u8],
     filename_prefix: &str,
+    output_format: OutputFormat,
+) -> Result<PathBuf, StorageError> {
+    let output_dir = output_directory()?;
+    write_output_in(&output_dir, encoded, filename_prefix, output_format).await
+}
+
+async fn write_output_in(
+    output_dir: &Path,
+    encoded: &[u8],
+    filename_prefix: &str,
+    output_format: OutputFormat,
 ) -> Result<PathBuf, StorageError> {
     tokio::fs::create_dir_all(&output_dir)
         .await
@@ -128,9 +154,37 @@ async fn write_png_in(
         .as_millis();
     let sequence = OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let process = std::process::id();
-    let filename = format!("{filename_prefix}-{timestamp}-{process}-{sequence}.png");
+    let extension = output_format.extension();
+    let filename = format!("{filename_prefix}-{timestamp}-{process}-{sequence}.{extension}");
     let path = output_dir.join(&filename);
-    let temporary_path = output_dir.join(format!(".{filename}.tmp"));
+    write_atomic(&path, encoded).await?;
+    Ok(path)
+}
+
+async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StorageError> {
+    let Some(output_dir) = path.parent() else {
+        return Err(StorageError::Io {
+            path: path.to_owned(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "destination has no parent directory",
+            ),
+        });
+    };
+    tokio::fs::create_dir_all(output_dir)
+        .await
+        .map_err(|source| StorageError::Io {
+            path: output_dir.to_owned(),
+            source,
+        })?;
+
+    let sequence = OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let filename = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "output".into());
+    let temporary_path =
+        output_dir.join(format!(".{filename}.{}-{sequence}.tmp", std::process::id()));
     let mut temporary_output = TemporaryOutput::new(temporary_path.clone());
 
     let write_result = async {
@@ -139,11 +193,11 @@ async fn write_png_in(
             .write(true)
             .open(&temporary_path)
             .await?;
-        file.write_all(png).await?;
+        file.write_all(bytes).await?;
         file.flush().await?;
         file.sync_all().await?;
         drop(file);
-        tokio::fs::rename(&temporary_path, &path).await?;
+        tokio::fs::rename(&temporary_path, path).await?;
         temporary_output.mark_committed();
         Ok::<(), std::io::Error>(())
     }
@@ -151,12 +205,12 @@ async fn write_png_in(
 
     if let Err(source) = write_result {
         return Err(StorageError::Io {
-            path: path.clone(),
+            path: path.to_owned(),
             source,
         });
     }
 
-    Ok(path)
+    Ok(())
 }
 
 fn output_directory() -> Result<PathBuf, StorageError> {
@@ -179,31 +233,62 @@ fn output_directory_from(
     Ok(data_home.join("a6-image-studio/outputs"))
 }
 #[derive(Debug)]
-struct PreparedPng {
-    png: Vec<u8>,
+struct PreparedImage {
+    encoded: Vec<u8>,
     width: u32,
     height: u32,
     rgba: Option<Vec<u8>>,
 }
 
-fn prepare_png(bytes: &[u8], include_preview: bool) -> Result<PreparedPng, image::ImageError> {
-    let format = image::guess_format(bytes)?;
-    let image = image::load_from_memory_with_format(bytes, format)?;
+fn prepare_image(
+    bytes: &[u8],
+    output_format: OutputFormat,
+    include_preview: bool,
+) -> Result<PreparedImage, image::ImageError> {
+    let source_format = image::guess_format(bytes)?;
+    let image = image::load_from_memory_with_format(bytes, source_format)?;
+    let desired_format = image_format(output_format);
+    let image = if desired_format == ImageFormat::Jpeg && source_format != ImageFormat::Jpeg {
+        flatten_transparency_onto_white(image)
+    } else {
+        image
+    };
     let (width, height) = image.dimensions();
     let rgba = include_preview.then(|| image.to_rgba8().into_raw());
-    let png = if format == ImageFormat::Png {
+    let encoded = if source_format == desired_format {
         bytes.to_vec()
     } else {
-        let mut png = Cursor::new(Vec::new());
-        image.write_to(&mut png, ImageFormat::Png)?;
-        png.into_inner()
+        let mut encoded = Cursor::new(Vec::new());
+        image.write_to(&mut encoded, desired_format)?;
+        encoded.into_inner()
     };
-    Ok(PreparedPng {
-        png,
+    Ok(PreparedImage {
+        encoded,
         width,
         height,
         rgba,
     })
+}
+
+fn flatten_transparency_onto_white(image: DynamicImage) -> DynamicImage {
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let rgb = RgbImage::from_fn(width, height, |x, y| {
+        let pixel = rgba.get_pixel(x, y);
+        let alpha = u16::from(pixel[3]);
+        let blend =
+            |channel: u8| ((u16::from(channel) * alpha + 255 * (255 - alpha) + 127) / 255) as u8;
+        Rgb([blend(pixel[0]), blend(pixel[1]), blend(pixel[2])])
+    });
+    DynamicImage::ImageRgb8(rgb)
+}
+
+fn image_format(output_format: OutputFormat) -> ImageFormat {
+    match output_format {
+        OutputFormat::Png => ImageFormat::Png,
+        OutputFormat::WebP => ImageFormat::WebP,
+        OutputFormat::Jpeg => ImageFormat::Jpeg,
+    }
 }
 
 #[cfg(test)]
@@ -218,11 +303,12 @@ mod tests {
             .write_to(&mut encoded, ImageFormat::Png)
             .expect("test PNG should encode");
 
-        let prepared = prepare_png(&encoded.into_inner(), false).expect("test PNG should validate");
+        let prepared = prepare_image(&encoded.into_inner(), OutputFormat::Png, false)
+            .expect("test PNG should validate");
 
         assert_eq!((prepared.width, prepared.height), (2, 3));
         assert_eq!(
-            image::guess_format(&prepared.png).expect("format should be known"),
+            image::guess_format(&prepared.encoded).expect("format should be known"),
             ImageFormat::Png
         );
         assert!(prepared.rgba.is_none());
@@ -236,14 +322,16 @@ mod tests {
             .write_to(&mut encoded, ImageFormat::Png)
             .expect("test PNG should encode");
 
-        let prepared = prepare_png(&encoded.into_inner(), true).expect("test PNG should validate");
+        let prepared = prepare_image(&encoded.into_inner(), OutputFormat::Png, true)
+            .expect("test PNG should validate");
 
         assert_eq!(prepared.rgba.as_deref().map(<[u8]>::len), Some(2 * 3 * 4));
     }
 
     #[test]
     fn rejects_non_image_data() {
-        let error = prepare_png(b"not an image", false).expect_err("invalid data should fail");
+        let error = prepare_image(b"not an image", OutputFormat::Png, false)
+            .expect_err("invalid data should fail");
 
         assert!(matches!(error, image::ImageError::Unsupported(_)));
     }
@@ -285,7 +373,7 @@ mod tests {
         ));
         let png = b"complete PNG payload";
 
-        let path = write_png_in(&directory, png, "generated")
+        let path = write_output_in(&directory, png, "generated", OutputFormat::Png)
             .await
             .expect("atomic write should succeed");
         let saved = tokio::fs::read(&path)
@@ -314,6 +402,88 @@ mod tests {
         tokio::fs::remove_dir_all(&directory)
             .await
             .expect("test output should be removable");
+    }
+
+    #[tokio::test]
+    async fn save_as_copy_atomically_replaces_the_selected_file() {
+        let test_id = OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "a6-image-studio-copy-test-{}-{test_id}",
+            std::process::id()
+        ));
+        tokio::fs::create_dir_all(&directory)
+            .await
+            .expect("test directory should be created");
+        let source = directory.join("source.webp");
+        let destination = directory.join("copy.webp");
+        tokio::fs::write(&source, b"new complete image")
+            .await
+            .expect("source should be written");
+        tokio::fs::write(&destination, b"old image")
+            .await
+            .expect("existing destination should be written");
+
+        copy_atomic(&source, &destination)
+            .await
+            .expect("atomic copy should succeed");
+
+        assert_eq!(
+            tokio::fs::read(&destination)
+                .await
+                .expect("destination should be readable"),
+            b"new complete image"
+        );
+        let mut entries = tokio::fs::read_dir(&directory)
+            .await
+            .expect("directory should be readable");
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .expect("directory entry should be readable")
+        {
+            assert!(!entry.file_name().to_string_lossy().ends_with(".tmp"));
+        }
+
+        tokio::fs::remove_dir_all(&directory)
+            .await
+            .expect("test output should be removable");
+    }
+
+    #[test]
+    fn converts_png_to_each_phase_three_output_format() {
+        let image = image::DynamicImage::new_rgb8(2, 3);
+        let mut png = Cursor::new(Vec::new());
+        image
+            .write_to(&mut png, ImageFormat::Png)
+            .expect("test PNG should encode");
+        let png = png.into_inner();
+
+        for (output_format, expected) in [
+            (OutputFormat::Png, ImageFormat::Png),
+            (OutputFormat::WebP, ImageFormat::WebP),
+            (OutputFormat::Jpeg, ImageFormat::Jpeg),
+        ] {
+            let prepared =
+                prepare_image(&png, output_format, true).expect("requested output should encode");
+            assert_eq!(
+                image::guess_format(&prepared.encoded).expect("format should be known"),
+                expected
+            );
+            assert_eq!((prepared.width, prepared.height), (2, 3));
+            assert_eq!(prepared.rgba.as_deref().map(<[u8]>::len), Some(24));
+        }
+    }
+
+    #[test]
+    fn jpeg_conversion_flattens_transparency_onto_white() {
+        let transparent = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            1,
+            1,
+            image::Rgba([1, 2, 3, 0]),
+        ));
+        let flattened = flatten_transparency_onto_white(transparent).to_rgb8();
+
+        assert_eq!(flattened.get_pixel(0, 0), &Rgb([255, 255, 255]));
     }
 
     #[test]

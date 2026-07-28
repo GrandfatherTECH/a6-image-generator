@@ -1,5 +1,6 @@
 //! Slint desktop application wiring.
 
+mod actions;
 mod controller;
 mod state;
 

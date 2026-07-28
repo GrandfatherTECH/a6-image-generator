@@ -1,156 +1,386 @@
-import { Button, HorizontalBox, Palette, Spinner, TextEdit, VerticalBox } from "std-widgets.slint";
+import {
+    Button,
+    CheckBox,
+    ComboBox,
+    HorizontalBox,
+    Palette,
+    ScrollView,
+    Spinner,
+    TextEdit,
+    VerticalBox
+} from "std-widgets.slint";
+
+component LabeledChoice {
+    in property <string> label;
+    in property <[string]> choices;
+    in-out property <string> value;
+    in property <bool> enabled: true;
+
+    height: 58px;
+    min-width: 180px;
+    horizontal-stretch: 1;
+
+    VerticalBox {
+        spacing: 4px;
+        Text {
+            text: root.label;
+            color: Palette.foreground;
+            font-weight: 600;
+        }
+        ComboBox {
+            model: root.choices;
+            current-value <=> root.value;
+            enabled: root.enabled;
+        }
+    }
+}
 
 export component AppWindow inherits Window {
     title: "A6 Image Studio";
-    preferred-width: 960px;
-    preferred-height: 720px;
-    min-width: 680px;
-    min-height: 560px;
+    preferred-width: 980px;
+    preferred-height: 860px;
+    min-width: 520px;
+    min-height: 400px;
     background: Palette.background;
 
     in-out property <string> prompt: "A single solid blue circle centered on a plain white background";
+    in-out property <string> size-value: "1024x1024";
+    in-out property <string> quality-value: "low";
+    in-out property <string> background-value: "auto";
+    in-out property <string> output-format-value: "PNG";
+    in-out property <bool> send-size: true;
+    in-out property <bool> send-quality: true;
+    in-out property <bool> send-background: true;
+    in-out property <bool> send-output-format: true;
+    in-out property <bool> compatibility-expanded: false;
+
     in property <string> connection-status: "Starting";
     in property <string> endpoint-text: "";
     in property <string> api-key-status: "";
     in property <string> model-text: "gpt-image-2";
     in property <string> error-text: "";
     in property <string> result-details: "";
+    in property <string> result-duration: "";
+    in property <string> result-dimensions: "";
+    in property <string> result-file-size: "";
+    in property <string> result-format: "";
+    in property <string> result-path: "";
+    in property <string> result-request-id: "";
+    in property <string> action-status: "";
     in property <bool> busy: false;
+    in property <bool> action-busy: false;
     in property <bool> configured: false;
+    in property <bool> has-result: false;
     in property <image> generated-image;
 
     callback test-connection();
-    callback generate-image(string);
+    callback generate-image();
     callback cancel-operation();
+    callback save-as();
+    callback copy-image();
+    callback copy-prompt(string);
+    callback regenerate();
+    callback open-containing-folder();
 
-    VerticalBox {
-        padding: 20px;
-        spacing: 14px;
+    scroll := ScrollView {
+        viewport-width: self.visible-width;
+        viewport-height: max(self.visible-height, content.min-height);
 
-        Text {
-            text: "A6 Image Studio";
-            font-size: 22px;
-            font-weight: 600;
-            color: Palette.foreground;
-        }
+        content := VerticalBox {
+            width: scroll.visible-width;
+            height: self.min-height;
+            padding-left: 20px;
+            padding-right: 28px;
+            padding-top: 18px;
+            padding-bottom: 20px;
+            spacing: 14px;
 
-        Rectangle {
-            height: 148px;
-            border-width: 1px;
-            border-color: Palette.border;
-            border-radius: 6px;
-            background: Palette.alternate-background;
+            Text {
+                text: "A6 Image Studio";
+                font-size: 24px;
+                font-weight: 650;
+                color: Palette.foreground;
+            }
 
-            VerticalBox {
-                padding: 12px;
-                spacing: 5px;
+            Rectangle {
+                height: 148px;
+                border-width: 1px;
+                border-color: Palette.border;
+                border-radius: 7px;
+                background: Palette.alternate-background;
 
-                HorizontalLayout {
-                    spacing: 10px;
-                    Text { text: "Connection"; font-weight: 600; color: Palette.foreground; }
-                    Text { text: root.connection-status; color: Palette.foreground; horizontal-stretch: 1; }
+                VerticalBox {
+                    padding: 12px;
+                    spacing: 5px;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text { text: "Connection"; font-weight: 600; color: Palette.foreground; }
+                        Text {
+                            text: root.connection-status;
+                            color: Palette.foreground;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        Button {
+                            text: "Test connection";
+                            enabled: root.configured && !root.busy;
+                            clicked => { root.test-connection(); }
+                        }
+                    }
+                    Text { text: "Endpoint: " + root.endpoint-text; color: Palette.foreground; overflow: elide; }
+                    Text { text: "API key: " + root.api-key-status; color: Palette.foreground; overflow: elide; }
+                    Text { text: "Model: " + root.model-text; color: Palette.foreground; overflow: elide; }
+                }
+            }
+
+            Text {
+                text: "Prompt";
+                font-weight: 600;
+                color: Palette.foreground;
+            }
+
+            TextEdit {
+                text <=> root.prompt;
+                placeholder-text: "Describe the image you want to generate";
+                height: 112px;
+                enabled: !root.busy;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                if root.send-size: LabeledChoice {
+                    label: "Size";
+                    choices: ["auto", "1024x1024", "1024x1536", "1536x1024"];
+                    value <=> root.size-value;
+                    enabled: !root.busy;
+                }
+                if root.send-quality: LabeledChoice {
+                    label: "Quality";
+                    choices: ["auto", "low", "medium", "high"];
+                    value <=> root.quality-value;
+                    enabled: !root.busy;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                if root.send-background: LabeledChoice {
+                    label: "Background";
+                    choices: ["auto", "opaque", "transparent"];
+                    value <=> root.background-value;
+                    enabled: !root.busy;
+                }
+                if root.send-output-format: LabeledChoice {
+                    label: "Output format";
+                    choices: ["PNG", "WebP", "JPEG"];
+                    value <=> root.output-format-value;
+                    enabled: !root.busy;
+                }
+            }
+
+            Rectangle {
+                height: root.compatibility-expanded ? 126px : 42px;
+                border-width: 1px;
+                border-color: Palette.border;
+                border-radius: 7px;
+                background: Palette.alternate-background;
+
+                VerticalBox {
+                    padding: 8px;
+                    spacing: 8px;
                     Button {
-                        text: "Test connection";
-                        enabled: root.configured && !root.busy;
-                        clicked => { root.test-connection(); }
+                        text: root.compatibility-expanded
+                            ? "Compatibility settings  ▴"
+                            : "Compatibility settings  ▾";
+                        enabled: !root.busy;
+                        clicked => {
+                            root.compatibility-expanded = !root.compatibility-expanded;
+                        }
+                    }
+                    if root.compatibility-expanded: HorizontalLayout {
+                        spacing: 12px;
+                        CheckBox {
+                            text: "Send size";
+                            checked <=> root.send-size;
+                            enabled: !root.busy;
+                        }
+                        CheckBox {
+                            text: "Send quality";
+                            checked <=> root.send-quality;
+                            enabled: !root.busy;
+                        }
+                    }
+                    if root.compatibility-expanded: HorizontalLayout {
+                        spacing: 12px;
+                        CheckBox {
+                            text: "Send background";
+                            checked <=> root.send-background;
+                            enabled: !root.busy;
+                        }
+                        CheckBox {
+                            text: "Send output format";
+                            checked <=> root.send-output-format;
+                            enabled: !root.busy;
+                        }
                     }
                 }
-                Text { text: "Endpoint: " + root.endpoint-text; color: Palette.foreground; overflow: elide; }
-                Text { text: "API key: " + root.api-key-status; color: Palette.foreground; overflow: elide; }
-                Text { text: "Model: " + root.model-text; color: Palette.foreground; overflow: elide; }
             }
-        }
 
-        Text {
-            text: "Prompt";
-            font-weight: 600;
-            color: Palette.foreground;
-        }
+            HorizontalBox {
+                padding: 0px;
+                spacing: 10px;
+                Text {
+                    text: root.busy
+                        ? root.connection-status
+                        : "Generation requests may be billable";
+                    color: Palette.foreground;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                if root.busy: Spinner {
+                    width: 28px;
+                    height: 28px;
+                    indeterminate: true;
+                }
+                Button {
+                    text: "Cancel";
+                    enabled: root.busy;
+                    clicked => { root.cancel-operation(); }
+                }
+                Button {
+                    text: "Generate image";
+                    primary: true;
+                    enabled: root.configured && !root.busy;
+                    clicked => { root.generate-image(); }
+                }
+            }
 
-        TextEdit {
-            text <=> root.prompt;
-            placeholder-text: "Describe the test image";
-            height: 96px;
-            enabled: !root.busy;
-            wrap: word-wrap;
-        }
+            if root.error-text != "": Rectangle {
+                height: 92px;
+                border-width: 1px;
+                border-color: Palette.border;
+                border-radius: 7px;
+                background: Palette.alternate-background;
+                TextEdit {
+                    x: 10px;
+                    y: 10px;
+                    width: parent.width - 20px;
+                    height: parent.height - 20px;
+                    text: "Error: " + root.error-text;
+                    wrap: word-wrap;
+                    read-only: true;
+                }
+            }
 
-        HorizontalBox {
-            padding: 0px;
-            spacing: 10px;
-            Text {
-                text: "1024x1024  |  low quality  |  PNG";
+            Rectangle {
+                height: 330px;
+                border-width: 1px;
+                border-color: Palette.border;
+                border-radius: 7px;
+                background: Palette.alternate-background;
+                clip: true;
+
+                if root.generated-image.width > 0: Image {
+                    x: 12px;
+                    y: 12px;
+                    width: parent.width - 24px;
+                    height: parent.height - 24px;
+                    source: root.generated-image;
+                    image-fit: contain;
+                    accessible-label: "Generated image preview";
+                }
+
+                if root.generated-image.width == 0: Text {
+                    text: root.busy ? "Generating image…" : "Generated image preview";
+                    color: Palette.foreground;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            if root.has-result: Rectangle {
+                height: 154px;
+                border-width: 1px;
+                border-color: Palette.border;
+                border-radius: 7px;
+                background: Palette.alternate-background;
+
+                VerticalBox {
+                    padding: 12px;
+                    spacing: 6px;
+                    Text { text: "Generated image"; color: Palette.foreground; font-weight: 600; }
+                    HorizontalLayout {
+                        spacing: 20px;
+                        Text { text: "Duration: " + root.result-duration; color: Palette.foreground; horizontal-stretch: 1; }
+                        Text { text: "Dimensions: " + root.result-dimensions; color: Palette.foreground; horizontal-stretch: 1; }
+                    }
+                    HorizontalLayout {
+                        spacing: 20px;
+                        Text { text: "File size: " + root.result-file-size; color: Palette.foreground; horizontal-stretch: 1; }
+                        Text { text: "Format: " + root.result-format; color: Palette.foreground; horizontal-stretch: 1; }
+                    }
+                    Text {
+                        text: "Request ID: " + root.result-request-id;
+                        color: Palette.foreground;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: "Saved to: " + root.result-path;
+                        color: Palette.foreground;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            if root.has-result: HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: "Save As…";
+                    enabled: !root.action-busy;
+                    clicked => { root.save-as(); }
+                }
+                Button {
+                    text: "Copy image";
+                    enabled: !root.action-busy;
+                    clicked => { root.copy-image(); }
+                }
+                Button {
+                    text: "Copy prompt";
+                    enabled: !root.action-busy;
+                    clicked => { root.copy-prompt(root.prompt); }
+                }
+            }
+
+            if root.has-result: HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: "Regenerate";
+                    enabled: root.configured && !root.busy && !root.action-busy;
+                    clicked => { root.regenerate(); }
+                }
+                Button {
+                    text: "Open containing folder";
+                    enabled: !root.action-busy;
+                    clicked => { root.open-containing-folder(); }
+                }
+            }
+
+            if root.action-status != "": Text {
+                text: root.action-status;
                 color: Palette.foreground;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-            }
-            if root.busy: Spinner {
-                width: 28px;
-                height: 28px;
-                indeterminate: true;
-            }
-            Button {
-                text: "Cancel";
-                enabled: root.busy;
-                clicked => { root.cancel-operation(); }
-            }
-            Button {
-                text: "Generate test image (billable)";
-                primary: true;
-                enabled: root.configured && !root.busy;
-                clicked => { root.generate-image(root.prompt); }
-            }
-        }
-
-        if root.error-text != "": Rectangle {
-            height: 80px;
-            border-width: 1px;
-            border-color: Palette.border;
-            border-radius: 6px;
-            background: Palette.alternate-background;
-            TextEdit {
-                x: 10px;
-                y: 10px;
-                width: parent.width - 20px;
-                height: parent.height - 20px;
-                text: "Error: " + root.error-text;
                 wrap: word-wrap;
-                read-only: true;
-            }
-        }
-
-        Rectangle {
-            vertical-stretch: 1;
-            min-height: 210px;
-            border-width: 1px;
-            border-color: Palette.border;
-            border-radius: 6px;
-            background: Palette.alternate-background;
-            clip: true;
-
-            if root.generated-image.width > 0: Image {
-                x: 12px;
-                y: 12px;
-                width: parent.width - 24px;
-                height: parent.height - 24px;
-                source: root.generated-image;
-                image-fit: contain;
-                accessible-label: "Generated image preview";
+                min-height: 24px;
             }
 
-            if root.generated-image.width == 0: Text {
-                text: root.busy ? "Generating image" : "Generated image preview";
+            if root.result-details != "": Text {
+                text: root.result-details;
                 color: Palette.foreground;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+                wrap: word-wrap;
+                min-height: 24px;
             }
-        }
-
-        Text {
-            text: root.result-details;
-            color: Palette.foreground;
-            overflow: elide;
-            min-height: 20px;
         }
     }
 }

@@ -144,16 +144,23 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::domain::PersistedImage;
+    use crate::generation::{GenerationInput, GenerationOptions, OutputFormat};
 
     fn generated_image() -> GeneratedImage {
         GeneratedImage::new(
-            PathBuf::from("/tmp/generated.png"),
-            2,
-            3,
-            24,
+            PersistedImage {
+                path: PathBuf::from("/tmp/generated.png"),
+                width: 2,
+                height: 3,
+                file_size: 24,
+                preview_rgba: vec![0; 2 * 3 * 4],
+                output_format: OutputFormat::Png,
+            },
             Duration::from_millis(250),
             ResponseMetadata::default(),
-            vec![0; 2 * 3 * 4],
+            GenerationInput::new("test prompt", GenerationOptions::default())
+                .expect("test generation input should be valid"),
         )
     }
 

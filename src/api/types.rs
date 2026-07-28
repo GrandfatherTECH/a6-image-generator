@@ -1,12 +1,19 @@
 use serde::{Deserialize, Serialize};
 
+use crate::generation::GenerationOptions;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ImageGenerationRequest<'a> {
     pub model: &'a str,
     pub prompt: &'a str,
-    pub size: &'a str,
-    pub quality: &'a str,
-    pub output_format: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<&'a str>,
 }
 
 impl<'a> ImageGenerationRequest<'a> {
@@ -21,10 +28,54 @@ impl<'a> ImageGenerationRequest<'a> {
         Self {
             model,
             prompt,
-            size: "1024x1024",
-            quality: "low",
-            output_format: "png",
+            size: Some("1024x1024"),
+            quality: Some("low"),
+            background: None,
+            output_format: Some("png"),
         }
+    }
+
+    pub fn configured(model: &'a str, prompt: &'a str, options: &'a GenerationOptions) -> Self {
+        let compatibility = options.compatibility;
+        Self {
+            model,
+            prompt,
+            size: compatibility.send_size.then(|| options.size.api_value()),
+            quality: compatibility
+                .send_quality
+                .then(|| options.quality.api_value()),
+            background: compatibility
+                .send_background
+                .then(|| options.background.api_value()),
+            output_format: compatibility
+                .send_output_format
+                .then(|| options.output_format.api_value()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::generation::{CompatibilitySettings, GenerationOptions};
+
+    #[test]
+    fn compatibility_settings_omit_disabled_parameters() {
+        let options = GenerationOptions {
+            compatibility: CompatibilitySettings {
+                send_quality: false,
+                send_background: false,
+                ..CompatibilitySettings::default()
+            },
+            ..GenerationOptions::default()
+        };
+        let request = ImageGenerationRequest::configured("model", "prompt", &options);
+        let json = serde_json::to_value(request).expect("request should serialize");
+
+        assert_eq!(json["size"], "1024x1024");
+        assert_eq!(json["output_format"], "png");
+        assert!(json.get("quality").is_none());
+        assert!(json.get("background").is_none());
     }
 }
 
