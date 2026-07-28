@@ -1,0 +1,156 @@
+import { Button, HorizontalBox, Palette, Spinner, TextEdit, VerticalBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "A6 Image Studio";
+    preferred-width: 960px;
+    preferred-height: 720px;
+    min-width: 680px;
+    min-height: 560px;
+    background: Palette.background;
+
+    in-out property <string> prompt: "A single solid blue circle centered on a plain white background";
+    in property <string> connection-status: "Starting";
+    in property <string> endpoint-text: "";
+    in property <string> api-key-status: "";
+    in property <string> model-text: "gpt-image-2";
+    in property <string> error-text: "";
+    in property <string> result-details: "";
+    in property <bool> busy: false;
+    in property <bool> configured: false;
+    in property <image> generated-image;
+
+    callback test-connection();
+    callback generate-image(string);
+    callback cancel-operation();
+
+    VerticalBox {
+        padding: 20px;
+        spacing: 14px;
+
+        Text {
+            text: "A6 Image Studio";
+            font-size: 22px;
+            font-weight: 600;
+            color: Palette.foreground;
+        }
+
+        Rectangle {
+            height: 112px;
+            border-width: 1px;
+            border-color: Palette.border;
+            border-radius: 6px;
+            background: Palette.alternate-background;
+
+            VerticalBox {
+                padding: 12px;
+                spacing: 5px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: "Connection"; font-weight: 600; color: Palette.foreground; }
+                    Text { text: root.connection-status; color: Palette.foreground; horizontal-stretch: 1; }
+                    Button {
+                        text: "Test connection";
+                        enabled: root.configured && !root.busy;
+                        clicked => { root.test-connection(); }
+                    }
+                }
+                Text { text: "Endpoint: " + root.endpoint-text; color: Palette.foreground; overflow: elide; }
+                Text { text: "API key: " + root.api-key-status; color: Palette.foreground; overflow: elide; }
+                Text { text: "Model: " + root.model-text; color: Palette.foreground; overflow: elide; }
+            }
+        }
+
+        Text {
+            text: "Prompt";
+            font-weight: 600;
+            color: Palette.foreground;
+        }
+
+        TextEdit {
+            text <=> root.prompt;
+            placeholder-text: "Describe the test image";
+            height: 96px;
+            enabled: !root.busy;
+            wrap: word-wrap;
+        }
+
+        HorizontalBox {
+            padding: 0px;
+            spacing: 10px;
+            Text {
+                text: "1024x1024  |  low quality  |  PNG";
+                color: Palette.foreground;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            if root.busy: Spinner {
+                width: 28px;
+                height: 28px;
+                indeterminate: true;
+            }
+            Button {
+                text: "Cancel";
+                enabled: root.busy;
+                clicked => { root.cancel-operation(); }
+            }
+            Button {
+                text: "Generate test image (billable)";
+                primary: true;
+                enabled: root.configured && !root.busy;
+                clicked => { root.generate-image(root.prompt); }
+            }
+        }
+
+        if root.error-text != "": Rectangle {
+            height: 80px;
+            border-width: 1px;
+            border-color: Palette.border;
+            border-radius: 6px;
+            background: Palette.alternate-background;
+            TextEdit {
+                x: 10px;
+                y: 10px;
+                width: parent.width - 20px;
+                height: parent.height - 20px;
+                text: "Error: " + root.error-text;
+                wrap: word-wrap;
+                read-only: true;
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            min-height: 210px;
+            border-width: 1px;
+            border-color: Palette.border;
+            border-radius: 6px;
+            background: Palette.alternate-background;
+            clip: true;
+
+            if root.generated-image.width > 0: Image {
+                x: 12px;
+                y: 12px;
+                width: parent.width - 24px;
+                height: parent.height - 24px;
+                source: root.generated-image;
+                image-fit: contain;
+                accessible-label: "Generated image preview";
+            }
+
+            if root.generated-image.width == 0: Text {
+                text: root.busy ? "Generating image" : "Generated image preview";
+                color: Palette.foreground;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: root.result-details;
+            color: Palette.foreground;
+            overflow: elide;
+            min-height: 20px;
+        }
+    }
+}
