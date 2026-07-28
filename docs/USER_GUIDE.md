@@ -1,6 +1,6 @@
 # User Guide
 
-This guide documents the Phase 1 Slint desktop interface and the permanent command-line interface.
+This guide documents the Phase 2 Slint desktop interface and the permanent command-line interface.
 
 ## Requirements
 
@@ -31,7 +31,7 @@ export A6API_IMAGE_MODEL='gpt-image-2'
 
 Shell exports last only for the current shell unless added to a secure environment setup. Do not put API keys in the repository or ordinary configuration files.
 
-Configuration is read when the process starts. Restart the application after changing an environment variable. Phase 1 does not store credentials or offer an in-app key editor.
+Configuration is read when the process starts. Restart the application after changing an environment variable. Phase 2 does not store credentials or offer an in-app key editor.
 
 ## Desktop interface
 
@@ -51,15 +51,15 @@ The connection panel displays the normalized endpoint, masked API key, configure
 
 `Test connection` calls the models endpoint and reports its HTTP status and whether the configured model is listed. A model missing from that list does not necessarily mean image generation is unavailable.
 
-`Generate test image` is a potentially billable action. It submits the current prompt with the Phase 1 fixed settings: `1024x1024`, low quality, and PNG output. While the request is active, the connection and generation buttons are disabled, a busy indicator is visible, and `Cancel` aborts the active asynchronous task. Successful output is validated, saved, and shown in the preview. The result line includes dimensions, file size, duration, path, and request ID when supplied.
+`Generate test image` is a potentially billable action. It submits the current prompt with the fixed Phase 1/2 settings: `1024x1024`, low quality, and PNG output. While the request is active, the connection and generation buttons are disabled, a busy indicator is visible, and `Cancel` aborts the active asynchronous task. A cancelled or superseded operation cannot later replace the visible state. Successful output is validated, atomically saved, and shown in the preview. The result line includes dimensions, file size, duration, path, and request ID when supplied.
 
 Generated desktop files use this location and filename form:
 
 ```text
-${XDG_DATA_HOME:-$HOME/.local/share}/a6-image-studio/outputs/generated-<timestamp>.png
+${XDG_DATA_HOME:-$HOME/.local/share}/a6-image-studio/outputs/generated-<timestamp>-<process>-<sequence>.png
 ```
 
-The Phase 1 interface intentionally has no size, quality, format, model, or output-directory controls yet.
+The Phase 2 interface intentionally has no size, quality, format, model, or output-directory controls yet.
 
 ## CLI commands
 

@@ -1,6 +1,6 @@
 # A6 Image Studio
 
-A6 Image Studio is a Linux desktop and command-line image-generation client for the A6API OpenAI-compatible gateway. The project is being built in reviewable phases. Phase 1 adds a deliberately minimal Slint interface on top of the production-oriented transport, storage, and CLI foundation proven in Phase 0.
+A6 Image Studio is a Linux desktop and command-line image-generation client for the A6API OpenAI-compatible gateway. The project is being built in reviewable phases. Phase 2 strengthens the architecture behind the deliberately minimal Slint interface proven in Phase 1.
 
 ## Current capabilities
 
@@ -11,6 +11,8 @@ A6 Image Studio is a Linux desktop and command-line image-generation client for 
 - Capture request ID, retry, and rate-limit response headers when present.
 - Launch a responsive Slint desktop window for connection testing and fixed-setting image generation.
 - Cancel an active GUI request and preview a generated image without decoding it on the UI thread.
+- Track idle, connecting, generating, success, cancelled, and error states explicitly.
+- Reject stale async completions and atomically commit generated output files.
 
 ## Quick start
 
@@ -42,4 +44,4 @@ See the [user guide](docs/USER_GUIDE.md) for configuration, desktop controls, an
 
 ## Project status
 
-Phase 1 is implemented and awaits manual desktop verification on KDE Plasma under Wayland and X11. Later controls and final visual design are intentionally deferred to their specified phases.
+Phase 2 is implemented and awaits its focused manual regression check. Image controls and the final KDE-oriented visual design remain intentionally deferred to their specified phases.

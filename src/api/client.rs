@@ -11,8 +11,8 @@ use crate::config::Config;
 use super::ApiError;
 use super::error::{HttpFailure, classify_transport};
 use super::types::{
-    ApiErrorEnvelope, GeneratedImage, ImageGenerationRequest, ImageGenerationResponse, ModelsCheck,
-    ModelsResponse, ResponseMetadata,
+    ApiErrorEnvelope, ImageGenerationOutput, ImageGenerationRequest, ImageGenerationResponse,
+    ModelsCheck, ModelsResponse, ResponseMetadata,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -77,7 +77,7 @@ impl ApiClient {
     pub async fn generate_image(
         &self,
         request: &ImageGenerationRequest<'_>,
-    ) -> Result<GeneratedImage, ApiError> {
+    ) -> Result<ImageGenerationOutput, ApiError> {
         let endpoint = endpoint_url(self.config.base_url(), "images/generations")?;
         let response = self
             .http
@@ -94,10 +94,10 @@ impl ApiClient {
         let metadata = response_metadata(response.headers());
         let body = read_limited_body(response).await?;
         match parse_image_response(&body, self.config.api_key().expose())? {
-            ImageSource::Bytes(bytes) => Ok(GeneratedImage { bytes, metadata }),
+            ImageSource::Bytes(bytes) => Ok(ImageGenerationOutput { bytes, metadata }),
             ImageSource::Url(url) => {
                 let bytes = self.download_image(url).await?;
-                Ok(GeneratedImage { bytes, metadata })
+                Ok(ImageGenerationOutput { bytes, metadata })
             }
         }
     }

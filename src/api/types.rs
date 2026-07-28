@@ -29,12 +29,12 @@ impl<'a> ImageGenerationRequest<'a> {
 }
 
 #[derive(Debug)]
-pub struct GeneratedImage {
+pub struct ImageGenerationOutput {
     pub bytes: Vec<u8>,
     pub metadata: ResponseMetadata,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelsCheck {
     pub http_status: u16,
     pub model_present: bool,

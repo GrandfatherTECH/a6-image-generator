@@ -2,7 +2,7 @@
 
 ## Scope and phase discipline
 
-The repository currently implements Phase 1. The Phase 0 CLI and transport behavior remain supported after successful real-gateway verification. Phase 1 adds only the minimal external Slint connectivity interface; typed application state and stronger stale-result guarantees remain Phase 2 work.
+The repository currently implements Phase 2. The Phase 0 CLI and transport behavior and the manually verified Phase 1 desktop workflow remain supported. Phase 2 formalizes application state, cancellation, stale-result protection, the generated-image domain model, and atomic output writes without adding generation controls.
 
 The command-line interface is a permanent application surface, not throwaway probe code. Future GUI code should call the library modules rather than duplicate configuration or HTTP behavior.
 
@@ -16,8 +16,10 @@ src/config.rs        environment loading, validation, secret masking
 src/api/types.rs     typed gateway requests, responses, and metadata
 src/api/error.rs     structured HTTP and transport error categories
 src/api/client.rs    endpoint construction, HTTP calls, response decoding
-src/app/controller.rs configuration display, callbacks, workers, cancellation
-src/storage/mod.rs   off-thread image conversion, preview pixels, XDG output
+src/domain.rs        durable generated-image application model
+src/app/state.rs     typed state machine and operation identity
+src/app/controller.rs configuration display, callbacks, workers, presentation
+src/storage/mod.rs   off-thread conversion and atomic XDG output commits
 tests/               mock-server transport tests; never real API calls
 ```
 
@@ -31,15 +33,19 @@ Generation responses are decoded in this order:
 2. When no Base64 value exists, use the first URL as a compatibility fallback.
 3. Fail explicitly if neither form exists.
 
-Image validation and format conversion run through `tokio::task::spawn_blocking`. The desktop save path also obtains RGBA preview pixels during that same decode pass. A `SharedPixelBuffer` is built on a Tokio worker, then the inexpensive Slint `Image` handle is created on the UI event loop. Atomic output writes are scheduled for Phase 2 as required by the product plan.
+Image validation and format conversion run through `tokio::task::spawn_blocking`. The desktop save path also obtains RGBA preview pixels during that same decode pass. A `SharedPixelBuffer` is built on a Tokio worker, then the inexpensive Slint `Image` handle is created on the UI event loop.
+
+Output is written to a uniquely named hidden temporary file in the destination directory. The file is fully written, flushed, and synchronized before a same-directory rename exposes the final PNG. Failures attempt to remove the temporary file, so readers do not observe partial final output.
 
 ## Desktop execution model
 
-`app::run` creates the Slint component on the main thread and a separate multi-thread Tokio runtime for background work. Slint callbacks only validate input, update immediate UI properties, and spawn work. They never await network, decoding, or filesystem operations.
+`app::run` creates the Slint component on the main thread and a separate multi-thread Tokio runtime for background work. Slint callbacks only validate input, transition application state, update immediate UI properties, and spawn work. They never await network, decoding, or filesystem operations. A single configured `ApiClient` is created at startup and cheaply cloned for both connectivity and generation operations.
 
-`OperationControl` stores the active Tokio `AbortHandle` and a monotonically increasing generation number. `Cancel` invalidates the current generation before aborting its task, so a result already queued from the worker cannot replace the cancelled UI state. Phase 2 will promote this minimal coordination into typed application state with dedicated transition and stale-result tests.
+`StateMachine` is the source of truth for the explicit `Idle`, `Connecting`, `Generating`, `Success`, `Cancelled`, and `Error` states. Each async operation receives a typed `OperationId`. `OperationControl` couples that state machine to the active Tokio `AbortHandle`; cancellation enters `Cancelled` before aborting the worker. A completion is accepted only if its ID still belongs to the active connecting or generating state, so a cancelled or superseded request cannot overwrite newer UI state.
 
-Worker completion uses `Weak<AppWindow>::upgrade_in_event_loop`. The closure checks that its operation generation is still current, clears the busy state, and applies either the sanitized error or successful result. Closing the window drops the strong Slint handle and any later worker result is discarded.
+Worker completion uses `Weak<AppWindow>::upgrade_in_event_loop`. The closure asks the state machine to accept the operation ID before presenting its sanitized error or successful result. Closing the window drops the strong Slint handle and any later worker result is discarded.
+
+The transport layer returns raw generation output. After validation and persistence, the controller constructs `domain::GeneratedImage`, which records the final path, dimensions, byte size, elapsed time, response metadata, and shared preview pixels. Successful generation state owns this domain object rather than transport bytes or ad-hoc UI strings.
 
 The desktop request currently uses `ImageGenerationRequest::test_image`, which fixes size, quality, and format while accepting the prompt and configured model. The CLI smoke command delegates to the same constructor with its deterministic prompt.
 
@@ -51,7 +57,7 @@ The binary has three invocation surfaces:
 
 ## Quality checks
 
-Run the complete Phase 1 verification set:
+Run the complete Phase 2 verification set:
 
 ```bash
 cargo fmt --all -- --check
@@ -61,7 +67,7 @@ cargo test --all-targets
 cargo build --release --locked
 ```
 
-Tests use a bounded local HTTP mock server and must not use the real gateway or require `A6API_KEY`. Unit tests cover URL normalization, key masking, endpoint construction, Base64/URL parsing, malformed responses, structured/non-JSON errors, and image validation. Integration tests verify request paths, bearer authentication, response metadata, error categorization, and URL fallback transport.
+Tests use a bounded local HTTP mock server and must not use the real gateway or require `A6API_KEY`. Unit tests cover URL normalization, key masking, endpoint construction, Base64/URL parsing, malformed responses, structured/non-JSON errors, image validation, all state transitions, worker abortion, stale-result rejection, and atomic output commits. Integration tests verify request paths, bearer authentication, response metadata, error categorization, and URL fallback transport.
 
 ## Adding behavior
 
@@ -76,14 +82,16 @@ Tests use a bounded local HTTP mock server and must not use the real gateway or 
 
 ## Planned module growth
 
-Phase 2 introduces typed application state, formal cancellation and stale-result tests, a generated-image domain type, and atomic writes. Later phases add validated generation controls, the polished KDE-oriented interface, secure settings/history, and Linux packaging in the order defined by the product specification.
+Phase 3 adds validated image-generation controls and output actions. Later phases add the polished KDE-oriented interface, secure settings/history, and Linux packaging in the order defined by the product specification.
 
-## Phase 1 manual test checklist
+## Phase 2 manual test checklist
 
-1. Start the app under KDE Wayland with `cargo run`, verify all text fits, and resize down to the minimum window size.
+1. Start the app under KDE Wayland with `cargo run`; verify the endpoint, key, and model rows all fit inside the connection card, then resize down to the minimum window size.
 2. Confirm only a masked key and normalized endpoint are visible, then run `Test connection`.
-3. Generate one image and verify the window stays responsive, buttons disable while busy, the PNG appears in the XDG output directory, and the preview/result metadata update.
-4. Start another generation, press `Cancel`, and verify the status returns to cancelled without a late success replacing it.
-5. Repeat the launch and connection/generation checks in an X11 Plasma session.
-6. Launch without `A6API_KEY` and verify the configuration error is shown without a crash or network request.
-7. Re-run `check` and `smoke-generate --yes` to confirm the CLI remains functional.
+3. Generate one image and verify the window stays responsive, buttons disable while busy, the PNG appears in the XDG output directory, and no `.tmp` file remains beside it.
+4. Verify the preview and result metadata update only after the final PNG exists and is readable.
+5. Start another generation, press `Cancel`, and verify the status returns to cancelled without a late success or error replacing it.
+6. Rapidly exercise cancellation followed by a new operation and verify the older completion cannot overwrite the newer state.
+7. Repeat the launch and connection/generation checks in an X11 Plasma session.
+8. Launch without `A6API_KEY` and verify the explicit error state is shown without a crash or network request.
+9. Re-run `check` and, only if another billable request is acceptable, `smoke-generate --yes` to confirm the CLI remains functional.

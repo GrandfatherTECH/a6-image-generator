@@ -1,15 +1,18 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, SharedString};
 use thiserror::Error;
 use tokio::runtime::{Builder, Handle};
 use tokio::task::AbortHandle;
 
+use super::state::{
+    ApplicationState, ConnectionResult, OperationId, OperationKind, StateMachine, SuccessResult,
+};
 use crate::AppWindow;
 use crate::api::{ApiClient, ApiError, ImageGenerationRequest, ModelsCheck, ResponseMetadata};
 use crate::config::{Config, DEFAULT_BASE_URL, DEFAULT_IMAGE_MODEL};
+use crate::domain::GeneratedImage;
 use crate::storage::{self, SavedImagePreview};
 
 #[derive(Debug, Error)]
@@ -20,51 +23,127 @@ pub enum GuiError {
     Platform(#[from] slint::PlatformError),
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
+struct Backend {
+    client: ApiClient,
+    model: String,
+}
+
+struct ActiveOperation {
+    id: OperationId,
+    abort: AbortHandle,
+}
+
+struct OperationCoordinator {
+    state: StateMachine,
+    active: Option<ActiveOperation>,
+}
+
+#[derive(Clone)]
 struct OperationControl {
-    active: Arc<Mutex<Option<AbortHandle>>>,
-    generation: Arc<AtomicU64>,
+    inner: Arc<Mutex<OperationCoordinator>>,
 }
 
 impl OperationControl {
-    fn begin(&self) -> u64 {
-        self.generation.fetch_add(1, Ordering::AcqRel) + 1
-    }
-
-    fn is_current(&self, generation: u64) -> bool {
-        self.generation.load(Ordering::Acquire) == generation
-    }
-
-    fn set_active(&self, handle: AbortHandle) -> Result<(), &'static str> {
-        let mut active = self
-            .active
-            .lock()
-            .map_err(|_| "operation control lock is unavailable")?;
-        *active = Some(handle);
-        Ok(())
-    }
-
-    fn finish(&self) {
-        match self.active.lock() {
-            Ok(mut active) => {
-                active.take();
-            }
-            Err(_) => tracing::error!("operation control lock is unavailable"),
+    fn new(initial_state: ApplicationState) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(OperationCoordinator {
+                state: StateMachine::new(initial_state),
+                active: None,
+            })),
         }
     }
 
-    fn cancel(&self) -> bool {
-        self.generation.fetch_add(1, Ordering::AcqRel);
-        match self.active.lock() {
-            Ok(mut active) => active.take().is_some_and(|handle| {
-                handle.abort();
-                true
-            }),
-            Err(_) => {
-                tracing::error!("operation control lock is unavailable");
-                false
+    fn lock(&self) -> MutexGuard<'_, OperationCoordinator> {
+        match self.inner.lock() {
+            Ok(inner) => inner,
+            Err(poisoned) => {
+                tracing::error!("operation coordinator lock was poisoned; recovering state");
+                poisoned.into_inner()
             }
         }
+    }
+
+    fn state(&self) -> ApplicationState {
+        self.lock().state.state().clone()
+    }
+
+    fn begin(&self, kind: OperationKind) -> (OperationId, ApplicationState) {
+        let mut coordinator = self.lock();
+        if let Some(active) = coordinator.active.take() {
+            active.abort.abort();
+        }
+        let operation = coordinator.state.begin(kind);
+        (operation, coordinator.state.state().clone())
+    }
+
+    fn attach(&self, operation: OperationId, abort: AbortHandle) {
+        let mut coordinator = self.lock();
+        if coordinator.state.is_active(operation) {
+            if let Some(previous) = coordinator.active.replace(ActiveOperation {
+                id: operation,
+                abort,
+            }) {
+                previous.abort.abort();
+            }
+        } else {
+            abort.abort();
+        }
+    }
+
+    fn cancel(&self) -> Option<ApplicationState> {
+        let mut coordinator = self.lock();
+        let operation = coordinator.state.cancel()?;
+        if let Some(active) = coordinator.active.take() {
+            if active.id == operation {
+                active.abort.abort();
+            } else {
+                tracing::warn!(
+                    active = ?active.id,
+                    cancelled = ?operation,
+                    "discarding an abort handle that did not match the active state"
+                );
+                active.abort.abort();
+            }
+        }
+        Some(coordinator.state.state().clone())
+    }
+
+    fn reject(&self, message: String) -> ApplicationState {
+        let mut coordinator = self.lock();
+        if let Some(active) = coordinator.active.take() {
+            active.abort.abort();
+        }
+        coordinator.state.reject(message);
+        coordinator.state.state().clone()
+    }
+
+    fn succeed(&self, operation: OperationId, result: SuccessResult) -> Option<ApplicationState> {
+        let mut coordinator = self.lock();
+        if !coordinator.state.succeed(operation, result) {
+            return None;
+        }
+        clear_finished_handle(&mut coordinator, operation);
+        Some(coordinator.state.state().clone())
+    }
+
+    fn fail(&self, operation: OperationId, message: String) -> Option<ApplicationState> {
+        let mut coordinator = self.lock();
+        if !coordinator.state.fail(operation, message) {
+            return None;
+        }
+        clear_finished_handle(&mut coordinator, operation);
+        Some(coordinator.state.state().clone())
+    }
+}
+
+fn clear_finished_handle(coordinator: &mut OperationCoordinator, operation: OperationId) {
+    if coordinator
+        .active
+        .as_ref()
+        .is_some_and(|active| active.id == operation)
+    {
+        coordinator.active.take();
     }
 }
 
@@ -74,9 +153,7 @@ enum OperationResult {
 }
 
 struct GenerationResult {
-    saved: SavedImagePreview,
-    metadata: ResponseMetadata,
-    elapsed: Duration,
+    image: GeneratedImage,
     pixels: SharedPixelBuffer<Rgba8Pixel>,
 }
 
@@ -87,30 +164,58 @@ pub fn run() -> Result<(), GuiError> {
         .build()
         .map_err(GuiError::Runtime)?;
     let ui = AppWindow::new()?;
-    let config = load_configuration(&ui);
-    bind_callbacks(&ui, runtime.handle().clone(), config);
+    let (backend, initial_state) = load_backend(&ui);
+    let operations = OperationControl::new(initial_state);
+    present_state(&ui, &operations.state());
+    bind_callbacks(&ui, runtime.handle().clone(), backend, operations);
     ui.run()?;
     Ok(())
 }
 
-fn load_configuration(ui: &AppWindow) -> Result<Config, String> {
-    match Config::from_env() {
-        Ok(config) => {
-            ui.set_endpoint_text(config.sanitized_base_url().into());
-            ui.set_api_key_status(config.api_key().masked().into());
-            ui.set_model_text(config.model().into());
-            ui.set_connection_status("Ready".into());
-            ui.set_configured(true);
-            Ok(config)
-        }
+fn load_backend(ui: &AppWindow) -> (Result<Backend, String>, ApplicationState) {
+    let config = match Config::from_env() {
+        Ok(config) => config,
         Err(error) => {
+            let message = error.to_string();
             ui.set_endpoint_text(fallback_endpoint_label().into());
             ui.set_api_key_status("Not available".into());
             ui.set_model_text(DEFAULT_IMAGE_MODEL.into());
-            ui.set_connection_status("Configuration required".into());
-            ui.set_error_text(error.to_string().into());
             ui.set_configured(false);
-            Err(error.to_string())
+            return (
+                Err(message.clone()),
+                ApplicationState::Error {
+                    operation: None,
+                    message,
+                },
+            );
+        }
+    };
+
+    ui.set_endpoint_text(config.sanitized_base_url().into());
+    ui.set_api_key_status(config.api_key().masked().into());
+    ui.set_model_text(config.model().into());
+
+    match ApiClient::new(config.clone()) {
+        Ok(client) => {
+            ui.set_configured(true);
+            (
+                Ok(Backend {
+                    client,
+                    model: config.model().to_owned(),
+                }),
+                ApplicationState::Idle,
+            )
+        }
+        Err(error) => {
+            let message = format!("{}: {error}", error.category());
+            ui.set_configured(false);
+            (
+                Err(message.clone()),
+                ApplicationState::Error {
+                    operation: None,
+                    message,
+                },
+            )
         }
     }
 }
@@ -122,69 +227,66 @@ fn fallback_endpoint_label() -> String {
         .unwrap_or_else(|_| "Invalid A6API_BASE_URL".to_owned())
 }
 
-fn bind_callbacks(ui: &AppWindow, runtime: Handle, config: Result<Config, String>) {
-    let operations = OperationControl::default();
-
+fn bind_callbacks(
+    ui: &AppWindow,
+    runtime: Handle,
+    backend: Result<Backend, String>,
+    operations: OperationControl,
+) {
     ui.on_test_connection({
         let ui_weak = ui.as_weak();
         let runtime = runtime.clone();
-        let config = config.clone();
+        let backend = backend.clone();
         let operations = operations.clone();
         move || {
-            let Ok(config) = config.clone() else {
+            let Ok(backend) = backend.clone() else {
                 return;
             };
-            set_busy(&ui_weak, "Testing connection");
-            let generation = operations.begin();
+            let (operation, state) = operations.begin(OperationKind::Connecting);
+            present_weak_state(&ui_weak, &state);
+
             let worker_operations = operations.clone();
             let worker_ui = ui_weak.clone();
             let task = runtime.spawn(async move {
-                let result = async {
-                    let client = ApiClient::new(config).map_err(OperationError::from)?;
-                    client
-                        .check_models()
-                        .await
-                        .map(OperationResult::Connection)
-                        .map_err(OperationError::from)
-                }
-                .await;
-                finish_operation(worker_ui, worker_operations, generation, result);
+                let result = backend
+                    .client
+                    .check_models()
+                    .await
+                    .map(OperationResult::Connection)
+                    .map_err(OperationError::from);
+                finish_operation(worker_ui, worker_operations, operation, result);
             });
-            if let Err(error) = operations.set_active(task.abort_handle()) {
-                task.abort();
-                set_controller_error(&ui_weak, error);
-            }
+            operations.attach(operation, task.abort_handle());
         }
     });
 
     ui.on_generate_image({
         let ui_weak = ui.as_weak();
         let runtime = runtime.clone();
-        let config = config.clone();
+        let backend = backend.clone();
         let operations = operations.clone();
         move |prompt: SharedString| {
             let prompt = prompt.trim().to_owned();
             if prompt.is_empty() {
-                set_controller_error(&ui_weak, "Enter a prompt before generating an image");
+                let state =
+                    operations.reject("Enter a prompt before generating an image".to_owned());
+                present_weak_state(&ui_weak, &state);
                 return;
             }
-            let Ok(config) = config.clone() else {
+            let Ok(backend) = backend.clone() else {
                 return;
             };
 
-            set_busy(&ui_weak, "Generating image");
-            let generation = operations.begin();
+            let (operation, state) = operations.begin(OperationKind::Generating);
+            present_weak_state(&ui_weak, &state);
+
             let worker_operations = operations.clone();
             let worker_ui = ui_weak.clone();
             let task = runtime.spawn(async move {
-                let started = Instant::now();
-                let result = generate(config, prompt, started).await;
-                finish_operation(worker_ui, worker_operations, generation, result);
+                let result = generate(backend, prompt, Instant::now()).await;
+                finish_operation(worker_ui, worker_operations, operation, result);
             });
-            if let Err(error) = operations.set_active(task.abort_handle()) {
-                task.abort();
-                set_controller_error(&ui_weak, error);
-            }
+            operations.attach(operation, task.abort_handle());
         }
     });
 
@@ -192,37 +294,48 @@ fn bind_callbacks(ui: &AppWindow, runtime: Handle, config: Result<Config, String
         let operations = operations.clone();
         let ui_weak = ui.as_weak();
         move || {
-            if operations.cancel()
-                && let Some(ui) = ui_weak.upgrade()
-            {
-                ui.set_busy(false);
-                ui.set_connection_status("Cancelled".into());
-                ui.set_error_text(SharedString::default());
-                ui.set_result_details("The active request was cancelled".into());
+            if let Some(state) = operations.cancel() {
+                present_weak_state(&ui_weak, &state);
             }
         }
     });
 }
 
 async fn generate(
-    config: Config,
+    backend: Backend,
     prompt: String,
     started: Instant,
 ) -> Result<OperationResult, OperationError> {
-    let client = ApiClient::new(config.clone())?;
-    let request = ImageGenerationRequest::test_image(config.model(), &prompt);
-    let generated = client.generate_image(&request).await?;
-    let metadata = generated.metadata;
-    let mut saved = storage::save_png_with_preview(generated.bytes).await?;
-    let rgba = std::mem::take(&mut saved.rgba);
-    let pixels =
-        SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba, saved.width, saved.height);
+    let request = ImageGenerationRequest::test_image(&backend.model, &prompt);
+    let generated = backend.client.generate_image(&request).await?;
+    let saved = storage::save_png_with_preview(generated.bytes).await?;
+    let image = generated_image(saved, generated.metadata, started);
+    let pixels = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+        image.preview_rgba(),
+        image.width(),
+        image.height(),
+    );
+
     Ok(OperationResult::Generation(GenerationResult {
-        saved,
-        metadata,
-        elapsed: started.elapsed(),
+        image,
         pixels,
     }))
+}
+
+fn generated_image(
+    saved: SavedImagePreview,
+    metadata: ResponseMetadata,
+    started: Instant,
+) -> GeneratedImage {
+    GeneratedImage::new(
+        saved.path,
+        saved.width,
+        saved.height,
+        saved.file_size,
+        started.elapsed(),
+        metadata,
+        saved.rgba,
+    )
 }
 
 #[derive(Debug, Error)]
@@ -246,44 +359,30 @@ impl From<ApiError> for OperationError {
     }
 }
 
-fn set_busy(ui_weak: &slint::Weak<AppWindow>, status: &str) {
-    if let Some(ui) = ui_weak.upgrade() {
-        ui.set_busy(true);
-        ui.set_connection_status(status.into());
-        ui.set_error_text(SharedString::default());
-        ui.set_result_details(SharedString::default());
-    }
-}
-
-fn set_controller_error(ui_weak: &slint::Weak<AppWindow>, message: &str) {
-    if let Some(ui) = ui_weak.upgrade() {
-        ui.set_busy(false);
-        ui.set_connection_status("Error".into());
-        ui.set_error_text(message.into());
-    }
-}
-
 fn finish_operation(
     ui_weak: slint::Weak<AppWindow>,
     operations: OperationControl,
-    generation: u64,
+    operation: OperationId,
     result: Result<OperationResult, OperationError>,
 ) {
     let error_message = result.as_ref().err().map(ToString::to_string);
-    let scheduled = ui_weak.upgrade_in_event_loop(move |ui| {
-        if !operations.is_current(generation) {
-            return;
-        }
-        operations.finish();
-        ui.set_busy(false);
-        match result {
-            Ok(OperationResult::Connection(check)) => apply_connection_result(&ui, check),
-            Ok(OperationResult::Generation(generated)) => {
-                apply_generation_result(&ui, generated);
+    let scheduled = ui_weak.upgrade_in_event_loop(move |ui| match result {
+        Ok(OperationResult::Connection(check)) => {
+            let success = SuccessResult::Connection(ConnectionResult::from(check));
+            if let Some(state) = operations.succeed(operation, success) {
+                present_state(&ui, &state);
             }
-            Err(error) => {
-                ui.set_connection_status("Error".into());
-                ui.set_error_text(error.to_string().into());
+        }
+        Ok(OperationResult::Generation(generated)) => {
+            let success = SuccessResult::Generation(generated.image.clone());
+            if let Some(state) = operations.succeed(operation, success) {
+                present_state(&ui, &state);
+                ui.set_generated_image(Image::from_rgba8(generated.pixels));
+            }
+        }
+        Err(error) => {
+            if let Some(state) = operations.fail(operation, error.to_string()) {
+                present_state(&ui, &state);
             }
         }
     });
@@ -292,42 +391,89 @@ fn finish_operation(
     }
 }
 
-fn apply_connection_result(ui: &AppWindow, check: ModelsCheck) {
-    let availability = if check.model_present {
-        "model available"
-    } else {
-        "model not listed"
-    };
-    ui.set_connection_status(
-        format!("Connected - HTTP {} - {availability}", check.http_status).into(),
-    );
-    ui.set_result_details(metadata_text(&check.metadata).into());
-    ui.set_error_text(SharedString::default());
+fn present_weak_state(ui_weak: &slint::Weak<AppWindow>, state: &ApplicationState) {
+    if let Some(ui) = ui_weak.upgrade() {
+        present_state(&ui, state);
+    }
 }
 
-fn apply_generation_result(ui: &AppWindow, generated: GenerationResult) {
-    let image = Image::from_rgba8(generated.pixels);
-    ui.set_generated_image(image);
-    ui.set_connection_status("Image generated".into());
+fn present_state(ui: &AppWindow, state: &ApplicationState) {
+    match state {
+        ApplicationState::Idle => {
+            ui.set_busy(false);
+            ui.set_connection_status("Ready".into());
+            ui.set_error_text(SharedString::default());
+            ui.set_result_details(SharedString::default());
+        }
+        ApplicationState::Connecting { .. } => present_busy(ui, "Testing connection"),
+        ApplicationState::Generating { .. } => present_busy(ui, "Generating image"),
+        ApplicationState::Success {
+            result: SuccessResult::Connection(connection),
+            ..
+        } => {
+            let availability = if connection.model_present {
+                "model available"
+            } else {
+                "model not listed"
+            };
+            ui.set_busy(false);
+            ui.set_connection_status(
+                format!(
+                    "Connected - HTTP {} - {availability}",
+                    connection.http_status
+                )
+                .into(),
+            );
+            ui.set_error_text(SharedString::default());
+            ui.set_result_details(metadata_text(&connection.metadata).into());
+        }
+        ApplicationState::Success {
+            result: SuccessResult::Generation(image),
+            ..
+        } => {
+            ui.set_busy(false);
+            ui.set_connection_status("Image generated".into());
+            ui.set_error_text(SharedString::default());
+            ui.set_result_details(generated_image_details(image).into());
+        }
+        ApplicationState::Cancelled { .. } => {
+            ui.set_busy(false);
+            ui.set_connection_status("Cancelled".into());
+            ui.set_error_text(SharedString::default());
+            ui.set_result_details("The active request was cancelled".into());
+        }
+        ApplicationState::Error { message, .. } => {
+            ui.set_busy(false);
+            ui.set_connection_status("Error".into());
+            ui.set_error_text(message.into());
+            ui.set_result_details(SharedString::default());
+        }
+    }
+}
+
+fn present_busy(ui: &AppWindow, status: &str) {
+    ui.set_busy(true);
+    ui.set_connection_status(status.into());
     ui.set_error_text(SharedString::default());
-    let metadata = metadata_text(&generated.metadata);
+    ui.set_result_details(SharedString::default());
+}
+
+fn generated_image_details(image: &GeneratedImage) -> String {
+    let metadata = metadata_text(image.response_metadata());
     let metadata = if metadata.is_empty() {
         String::new()
     } else {
         format!(" | {metadata}")
     };
-    ui.set_result_details(
-        format!(
-            "{}x{} | {} bytes | {:.2?} | {}{}",
-            generated.saved.width,
-            generated.saved.height,
-            generated.saved.file_size,
-            generated.elapsed,
-            generated.saved.path.display(),
-            metadata,
-        )
-        .into(),
-    );
+    format!(
+        "{}x{} | {} bytes | {:.2?} | {}{}",
+        image.width(),
+        image.height(),
+        image.file_size(),
+        image.elapsed(),
+        image.path().display(),
+        metadata,
+    )
 }
 
 fn metadata_text(metadata: &ResponseMetadata) -> String {
@@ -340,6 +486,8 @@ fn metadata_text(metadata: &ResponseMetadata) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::future;
+
     use super::*;
 
     #[test]
@@ -352,13 +500,19 @@ mod tests {
         assert_eq!(metadata_text(&metadata), "Request ID: request-123");
     }
 
-    #[test]
-    fn operation_cancellation_invalidates_current_generation() {
-        let operations = OperationControl::default();
-        let generation = operations.begin();
+    #[tokio::test]
+    async fn cancellation_aborts_the_attached_worker_task() {
+        let operations = OperationControl::new(ApplicationState::Idle);
+        let (operation, _) = operations.begin(OperationKind::Generating);
+        let task = tokio::spawn(future::pending::<()>());
+        operations.attach(operation, task.abort_handle());
 
-        assert!(operations.is_current(generation));
-        assert!(!operations.cancel());
-        assert!(!operations.is_current(generation));
+        let state = operations.cancel().expect("active operation should cancel");
+        assert_eq!(state, ApplicationState::Cancelled { operation });
+
+        let join_error = task
+            .await
+            .expect_err("cancelled worker task should not complete");
+        assert!(join_error.is_cancelled());
     }
 }

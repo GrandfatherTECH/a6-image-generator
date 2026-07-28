@@ -1,10 +1,49 @@
 use std::ffi::OsString;
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use image::{GenericImageView, ImageFormat};
 use thiserror::Error;
+use tokio::io::AsyncWriteExt;
+
+static OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct TemporaryOutput {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl TemporaryOutput {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            committed: false,
+        }
+    }
+
+    fn mark_committed(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for TemporaryOutput {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        if let Err(error) = std::fs::remove_file(&self.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                path = %self.path.display(),
+                %error,
+                "failed to remove incomplete output file"
+            );
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct SavedImage {
@@ -31,7 +70,7 @@ pub enum StorageError {
     InvalidImage(#[from] image::ImageError),
     #[error("background image processing task failed: {0}")]
     ProcessingTask(#[from] tokio::task::JoinError),
-    #[error("failed to create or write output file {path}: {source}")]
+    #[error("failed to create, write, or commit output file {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]
@@ -68,10 +107,18 @@ pub async fn save_png_with_preview(bytes: Vec<u8>) -> Result<SavedImagePreview, 
 
 async fn write_png(png: &[u8], filename_prefix: &str) -> Result<PathBuf, StorageError> {
     let output_dir = output_directory()?;
+    write_png_in(&output_dir, png, filename_prefix).await
+}
+
+async fn write_png_in(
+    output_dir: &Path,
+    png: &[u8],
+    filename_prefix: &str,
+) -> Result<PathBuf, StorageError> {
     tokio::fs::create_dir_all(&output_dir)
         .await
         .map_err(|source| StorageError::Io {
-            path: output_dir.clone(),
+            path: output_dir.to_owned(),
             source,
         })?;
 
@@ -79,13 +126,35 @@ async fn write_png(png: &[u8], filename_prefix: &str) -> Result<PathBuf, Storage
         .duration_since(UNIX_EPOCH)
         .map_err(|_| StorageError::InvalidSystemTime)?
         .as_millis();
-    let path = output_dir.join(format!("{filename_prefix}-{timestamp}.png"));
-    tokio::fs::write(&path, png)
-        .await
-        .map_err(|source| StorageError::Io {
+    let sequence = OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let process = std::process::id();
+    let filename = format!("{filename_prefix}-{timestamp}-{process}-{sequence}.png");
+    let path = output_dir.join(&filename);
+    let temporary_path = output_dir.join(format!(".{filename}.tmp"));
+    let mut temporary_output = TemporaryOutput::new(temporary_path.clone());
+
+    let write_result = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary_path)
+            .await?;
+        file.write_all(png).await?;
+        file.flush().await?;
+        file.sync_all().await?;
+        drop(file);
+        tokio::fs::rename(&temporary_path, &path).await?;
+        temporary_output.mark_committed();
+        Ok::<(), std::io::Error>(())
+    }
+    .await;
+
+    if let Err(source) = write_result {
+        return Err(StorageError::Io {
             path: path.clone(),
             source,
-        })?;
+        });
+    }
 
     Ok(path)
 }
@@ -205,5 +274,64 @@ mod tests {
             path,
             PathBuf::from("/home/tester/.local/share/a6-image-studio/outputs")
         );
+    }
+
+    #[tokio::test]
+    async fn atomically_commits_complete_output_without_leaving_a_temporary_file() {
+        let test_id = OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "a6-image-studio-storage-test-{}-{test_id}",
+            std::process::id()
+        ));
+        let png = b"complete PNG payload";
+
+        let path = write_png_in(&directory, png, "generated")
+            .await
+            .expect("atomic write should succeed");
+        let saved = tokio::fs::read(&path)
+            .await
+            .expect("committed output should be readable");
+        let mut entries = tokio::fs::read_dir(&directory)
+            .await
+            .expect("test output directory should be readable");
+        let mut filenames = Vec::new();
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .expect("directory entries should be readable")
+        {
+            filenames.push(entry.file_name());
+        }
+
+        assert_eq!(saved, png);
+        assert_eq!(filenames, vec![path.file_name().expect("path has a name")]);
+        assert!(
+            filenames
+                .iter()
+                .all(|name| !name.to_string_lossy().ends_with(".tmp"))
+        );
+
+        tokio::fs::remove_dir_all(&directory)
+            .await
+            .expect("test output should be removable");
+    }
+
+    #[test]
+    fn dropped_temporary_output_removes_an_incomplete_file() {
+        let test_id = OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "a6-image-studio-guard-test-{}-{test_id}",
+            std::process::id()
+        ));
+        let temporary_path = directory.join(".generated.png.tmp");
+        std::fs::create_dir_all(&directory).expect("test directory should be created");
+        std::fs::write(&temporary_path, b"incomplete").expect("test file should be written");
+
+        {
+            let _temporary_output = TemporaryOutput::new(temporary_path.clone());
+        }
+
+        assert!(!temporary_path.exists());
+        std::fs::remove_dir_all(&directory).expect("test directory should be removable");
     }
 }
