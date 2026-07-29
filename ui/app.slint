@@ -56,6 +56,52 @@ component SectionTitle {
     }
 }
 
+// TextInput provides native text selection without adding form-field chrome.
+// Keep this visually equivalent to Text so metadata remains part of the
+// existing details layout rather than becoming a collection of text boxes.
+component SelectableText inherits Rectangle {
+    in property <string> text;
+    in property <brush> text-color: Palette.foreground;
+    in property <int> text-weight: 400;
+    in property <TextWrap> text-wrap: no-wrap;
+    in property <TextVerticalAlignment> vertical-text-alignment: center;
+    in property <string> description: "Selectable text";
+
+    min-height: 20px;
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    background: transparent;
+    clip: true;
+
+    ContextMenuArea {
+        Menu {
+            MenuItem {
+                title: "Copy";
+                enabled: root.text != "";
+                activated => { selectable.copy(); }
+            }
+            MenuItem {
+                title: "Select All";
+                enabled: root.text != "";
+                activated => { selectable.select-all(); }
+            }
+        }
+
+        selectable := TextInput {
+            width: parent.width;
+            height: parent.height;
+            text: root.text;
+            read-only: true;
+            single-line: root.text-wrap == TextWrap.no-wrap;
+            wrap: root.text-wrap;
+            color: root.text-color;
+            font-weight: root.text-weight;
+            vertical-alignment: root.vertical-text-alignment;
+            accessible-label: root.description;
+        }
+    }
+}
+
 component LabeledChoice {
     in property <string> label;
     in property <[string]> choices;
@@ -931,20 +977,36 @@ component HistoryDetail {
                     vertical-alignment: center;
                 }
             }
-            TextEdit {
-                height: 176px;
-                vertical-stretch: 0;
-                text: "Timestamp: " + root.selected-timestamp
-                    + "\nPrompt: " + root.selected-prompt
-                    + "\nModel: " + root.selected-model
-                    + "\nResolution: " + root.selected-dimensions
-                    + "\nSettings: " + root.selected-settings
-                    + "\nSession ID: " + root.selected-session
-                    + "\nRequest ID: " + root.selected-request-id
-                    + "\nFile path: " + root.selected-path;
-                read-only: true;
-                wrap: word-wrap;
-                accessible-label: "Selectable saved request details";
+            SelectableText {
+                text: root.selected-timestamp + "  ·  " + root.selected-dimensions;
+                text-weight: 650;
+                description: "Saved request timestamp and resolution";
+            }
+            SelectableText {
+                text: root.selected-prompt;
+                height: 54px;
+                text-wrap: word-wrap;
+                vertical-text-alignment: top;
+                description: "Saved request prompt";
+            }
+            SelectableText {
+                text: root.selected-model + "  ·  " + root.selected-settings;
+                opacity: 0.72;
+                height: 40px;
+                text-wrap: word-wrap;
+                vertical-text-alignment: top;
+                description: "Saved request model and settings";
+            }
+            SelectableText {
+                text: "Session  " + root.selected-session
+                    + "    ·    Request ID  " + root.selected-request-id;
+                opacity: 0.68;
+                description: "Saved request session and request ID";
+            }
+            SelectableText {
+                text: root.selected-path;
+                opacity: 0.68;
+                description: "Saved image file path";
             }
             HorizontalLayout {
                 spacing: 8px;
@@ -1189,31 +1251,46 @@ component ErrorDetail {
                 color: Palette.foreground;
                 font-weight: 650;
             }
-            TextEdit {
-                height: 132px;
-                vertical-stretch: 0;
-                text: "Session ID: " + root.selected-session
-                    + "\nOperation: " + root.selected-operation
-                    + "\nModel: " + root.selected-model
-                    + "\nRequest ID: " + root.selected-request-id
-                    + "\nEndpoint: " + root.selected-endpoint
-                    + "\nPrompt: " + root.selected-prompt;
-                read-only: true;
-                wrap: word-wrap;
-                accessible-label: "Selectable error request details";
+            SelectableText {
+                text: "Session  " + root.selected-session
+                    + "    ·    Operation  " + root.selected-operation;
+                opacity: 0.72;
+                description: "Error session and operation";
             }
-            Text {
-                text: "Error text";
-                color: Palette.foreground;
-                font-weight: 650;
+            SelectableText {
+                text: "Model  " + root.selected-model
+                    + "    ·    Request ID  " + root.selected-request-id;
+                opacity: 0.72;
+                description: "Error model and request ID";
             }
-            TextEdit {
+            SelectableText {
+                text: "Endpoint  " + root.selected-endpoint;
+                opacity: 0.72;
+                description: "Error endpoint";
+            }
+            SelectableText {
+                text: "Prompt  " + root.selected-prompt;
+                height: 52px;
+                text-wrap: word-wrap;
+                vertical-text-alignment: top;
+                description: "Error request prompt";
+            }
+            Rectangle {
                 height: 76px;
-                vertical-stretch: 0;
-                text: root.selected-summary;
-                read-only: true;
-                wrap: word-wrap;
-                accessible-label: "Selectable error text";
+                border-width: 1px;
+                border-color: Palette.border;
+                border-radius: 5px;
+                background: Palette.alternate-background.transparentize(0.08);
+                SelectableText {
+                    x: 8px;
+                    y: 6px;
+                    width: parent.width - 16px;
+                    height: parent.height - 12px;
+                    text: root.selected-summary;
+                    text-wrap: word-wrap;
+                    vertical-text-alignment: top;
+                    description: "Error text";
+                }
             }
             Text {
                 text: root.selected-response-truncated
