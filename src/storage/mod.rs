@@ -76,7 +76,7 @@ pub struct LoadedImagePreview {
 
 #[derive(Debug, Error)]
 pub enum StorageError {
-    #[error("an XDG data directory could not be determined")]
+    #[error("the application output directory could not be determined")]
     OutputDirectoryUnavailable(#[from] XdgPathError),
     #[error("image validation or conversion failed: {0}")]
     InvalidImage(#[from] image::ImageError),

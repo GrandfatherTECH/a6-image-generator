@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.grandfathertech.a6-image-studio</id>
+  <id>org.a6studio.A6ImageStudio</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-proprietary</project_license>
   <name>A6 Image Studio</name>
@@ -16,13 +16,13 @@
       desktop file actions.
     </p>
   </description>
-  <url type="homepage">https://github.com/grandfathertech</url>
-  <launchable type="desktop-id">io.github.grandfathertech.a6-image-studio.desktop</launchable>
+  <url type="homepage">https://a6api.com</url>
+  <launchable type="desktop-id">org.a6studio.A6ImageStudio.desktop</launchable>
   <provides>
     <binary>a6-image-studio</binary>
   </provides>
-  <developer id="io.github.grandfathertech">
-    <name>grandfathertech</name>
+  <developer id="org.a6studio">
+    <name>A6 Studio</name>
   </developer>
   <releases>
     <release version="0.1.0" date="2026-07-28">

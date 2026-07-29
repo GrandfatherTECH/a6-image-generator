@@ -43,7 +43,7 @@ Environment variables are read when the process starts. Restart the application 
 The Settings page stores only non-secret preferences in:
 
 ```text
-${XDG_CONFIG_HOME:-$HOME/.config}/a6-image-studio/settings.json
+$HOME/.config/a6-studio/settings.json
 ```
 
 The page controls the base URL, model ID, default dimensions/quality/format, output directory, request timeout from 10 to 1800 seconds, and optional generation-history retention. The output directory must be an absolute path.
@@ -52,10 +52,13 @@ The page controls the base URL, model ID, default dimensions/quality/format, out
 
 Entering a key and choosing `Store in system keyring` stores it through the Linux Secret Service API, normally backed by KWallet on KDE or GNOME Keyring on GNOME. The Settings page always identifies the active source as `environment`, `system keyring`, or `none` and displays only a masked key.
 
-- The application never writes an API key to `settings.json`, `history.json`, `errors.json`, TOML, logs, or UI history.
+- Secret Service managers such as KeepSecret display the intentional per-user label `org.a6-studio.key.<login-username>`.
+- The Secret Service lookup attributes are service `org.a6-studio.key` and username `<login-username>`.
+- The application never writes an API key to `settings.json`, `a6-studio.sqlite3`, TOML, logs, or UI history.
 - Existing environment credentials are never silently copied into the keyring.
 - Storing a key while `A6API_KEY` is set does not replace the active environment key; it becomes available after the environment variable is removed and the application is restarted.
 - `Forget stored key` removes only the system-keyring entry. It cannot remove a key supplied by the process environment.
+- When no new entry exists, a stored Phase 5 entry named `keyring:A6API_KEY@io.github.grandfathertech.a6-image-studio` is copied to the new identity and removed only after the new write succeeds.
 
 ## Desktop interface
 
@@ -172,14 +175,14 @@ Result actions run away from Slint's event loop and show nonintrusive completion
 Generated desktop files use this location and filename form:
 
 ```text
-${XDG_DATA_HOME:-$HOME/.local/share}/a6-image-studio/outputs/generated-<timestamp>-<process>-<sequence>.<png|webp|jpg>
+$HOME/.config/a6-studio/outputs/generated-<timestamp>-<process>-<sequence>.<png|webp|jpg>
 ```
 
 The default directory can be changed in Settings. Changing it affects subsequent desktop generations; existing history entries continue to reference the path at which each image was originally saved.
 
 ## Persistent generation history
 
-When `Retain local generation history` is enabled, every successful desktop generation is recorded in the History section and grouped by application session. Each entry contains only:
+When `Retain local generation history` is enabled, every successful desktop generation is recorded transactionally in `a6-studio.sqlite3` and grouped by application session. Each entry contains only:
 
 - timestamp and session identifier;
 - output path;
@@ -188,7 +191,7 @@ When `Retain local generation history` is enabled, every successful desktop gene
 - decoded dimensions;
 - request ID when supplied.
 
-Image bytes and Base64 provider payloads are never duplicated into history. Search matches prompts, models, paths, request IDs, timestamps, and session IDs.
+Image bytes and Base64 provider payloads are never duplicated into SQLite. Search matches prompts, models, paths, request IDs, timestamps, and session IDs.
 
 Selecting an entry loads a bounded preview from the original output path. `Load in Create` restores its prompt and settings. If the image was moved or deleted, the interface explains that the file is unavailable, disables file-dependent actions, and still allows the cached prompt/settings to be restored. `Clear history` removes metadata only; it deliberately does not delete generated image files.
 
@@ -196,7 +199,7 @@ Disabling retention stops new successful generations from being appended. Existi
 
 ## Error log
 
-The separate Error log records connection, generation, validation, and other operational failures with:
+The separate Error log records connection, generation, validation, and other operational failures in the same SQLite database with:
 
 - UTC timestamp and application session;
 - operation and error category;
@@ -242,7 +245,7 @@ This command makes one potentially billable request using a fixed prompt, `1024x
 The resulting image is validated before it is saved. CLI smoke files use the following location:
 
 ```text
-${XDG_DATA_HOME:-$HOME/.local/share}/a6-image-studio/outputs/
+$HOME/.config/a6-studio/outputs/
 ```
 
 The command prints the exact path, dimensions, byte size, request ID when available, and elapsed time. It never opens the image automatically.
@@ -286,25 +289,37 @@ On KDE Wayland, install `wl-clipboard` if `Copy image` or `Copy prompt` reports 
 
 `Save As…` uses the XDG desktop portal on Linux. If no dialog appears, verify that the desktop portal and KDE portal backend are installed and running for the current session.
 
-## Desktop identity and XDG locations
+## Desktop identity and application storage
 
 The stable desktop application ID is:
 
 ```text
-io.github.grandfathertech.a6-image-studio
+org.a6studio.A6ImageStudio
 ```
 
 Source assets are provided under `packaging/` and `assets/icons/hicolor/` for a later packaging phase. Package maintainers should install the desktop entry to `share/applications`, AppStream metadata to `share/metainfo`, and each icon to its corresponding `share/icons/hicolor` directory.
 
-The application resolves standard XDG locations:
+Application-managed state is consolidated below `~/.config/a6-studio` as requested. The user pictures directory remains the starting location for Save As:
 
 | Purpose | Default path |
 | --- | --- |
-| Generated output | `${XDG_DATA_HOME:-$HOME/.local/share}/a6-image-studio/outputs/` |
+| Generated output | `$HOME/.config/a6-studio/outputs/` |
 | Save As starting directory | `${XDG_PICTURES_DIR:-$HOME/Pictures}` |
-| Ordinary settings | `${XDG_CONFIG_HOME:-$HOME/.config}/a6-image-studio/settings.json` |
-| Generation-history metadata | `${XDG_DATA_HOME:-$HOME/.local/share}/a6-image-studio/history.json` |
-| Error-log metadata | `${XDG_DATA_HOME:-$HOME/.local/share}/a6-image-studio/errors.json` |
-| Reserved cache directory | `${XDG_CACHE_HOME:-$HOME/.cache}/a6-image-studio/` |
+| Ordinary settings | `$HOME/.config/a6-studio/settings.json` |
+| Sessions, generation history, and errors | `$HOME/.config/a6-studio/a6-studio.sqlite3` |
+| Application cache | `$HOME/.config/a6-studio/cache/` |
 
-The API key is not stored at any filesystem location listed above. It remains in the environment or the desktop keyring.
+SQLite uses foreign keys, transactional mutations, a five-second busy timeout, and write-ahead logging. The adjacent `a6-studio.sqlite3-wal` and `a6-studio.sqlite3-shm` files can exist while the application is running and are part of normal SQLite operation.
+
+### Migration from the former layout
+
+On the first run with the new layout:
+
+- `settings.json` is imported from the former XDG configuration directory when the new file does not exist;
+- `history.json` and `errors.json` are imported transactionally from the former XDG data directory into SQLite;
+- the old JSON files are left untouched as recovery backups;
+- import-completion markers in SQLite prevent duplicate imports;
+- an old default output-directory setting changes to the new `~/.config/a6-studio/outputs/` default;
+- existing generated images are not moved, and imported history continues to reference their original paths.
+
+The API key is not stored in any application-managed file or SQLite table. It remains in the environment or the desktop Secret Service.

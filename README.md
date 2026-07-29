@@ -1,13 +1,13 @@
 # A6 Image Studio
 
-A6 Image Studio is a Linux desktop and command-line image-generation client for the A6API OpenAI-compatible gateway. The project is being built in reviewable phases. Phase 5 adds secure settings, optional persistent session history, and searchable diagnostics to the polished Linux desktop experience established in earlier phases.
+A6 Image Studio is a Linux desktop and command-line image-generation client for the A6API OpenAI-compatible gateway. The project is being built in reviewable phases. The Phase 5 desktop now uses secure system-keyring credentials and a transactional SQLite database for persistent sessions, generation history, and searchable diagnostics.
 
 ## Current capabilities
 
 - Validate environment-based A6API configuration without exposing the API key.
 - Check `/v1/models` and report authentication, rate-limit, server, timeout, DNS, and TLS failures.
 - Make one explicitly confirmed, billable `gpt-image-2` smoke generation.
-- Accept either Base64 or URL image responses, validate them, convert desktop output to the selected PNG/WebP/JPEG format, and store it under the XDG data directory.
+- Accept either Base64 or URL image responses, validate them, convert desktop output to the selected PNG/WebP/JPEG format, and store it under the configured output directory.
 - Capture request ID, retry, and rate-limit response headers when present.
 - Launch a responsive, vertically scrollable, translucent Slint desktop window that follows the system light/dark palette and prefers Winit on Wayland or X11, with Qt as a startup fallback.
 - Use the documented `gpt-image-2` dimension presets or any custom valid dimensions, plus quality, background, and PNG/WebP/JPEG controls.
@@ -19,10 +19,12 @@ A6 Image Studio is a Linux desktop and command-line image-generation client for 
 - Display request duration, requested and actual dimensions, encoded file size, format, path, and request ID.
 - Report proportional provider-adjusted output sizes without treating them as failures, while still warning when the returned aspect ratio changes.
 - Switch among the six most recent results from the current session.
-- Persist ordinary preferences under XDG configuration and optionally store the API key in Secret Service/KWallet; environment credentials always take precedence.
-- Keep searchable generation history grouped by application session, restore old prompts/settings even when an image file has been moved or deleted, and clear metadata without deleting generated images.
-- Keep a separate searchable error log with timestamps, session/request context, and the sanitized provider response body (up to a 1 MiB safety limit).
-- Integrate with Linux desktops through a stable XDG app ID, desktop entry, AppStream metadata, freedesktop icon set, XDG paths, and portal-backed Save As.
+- Consolidate application-managed settings, cache, output defaults, and the SQLite database below `~/.config/a6-studio/`.
+- Optionally store the API key in Secret Service/KWallet under the visible per-user label `org.a6-studio.key.<username>`; environment credentials always take precedence.
+- Keep transactional, searchable SQLite generation history grouped by application session, restore old prompts/settings even when an image file has been moved or deleted, and clear metadata without deleting generated images.
+- Keep a separate searchable SQLite error log with timestamps, session/request context, and the sanitized provider response body (up to a 1 MiB safety limit).
+- Import the former JSON settings/history/error files and legacy keyring entry once without deleting the JSON recovery copies.
+- Integrate with Linux desktops through a stable XDG app ID, desktop entry, AppStream metadata, freedesktop icon set, consolidated application paths, and portal-backed Save As.
 
 ## Quick start
 
@@ -66,4 +68,4 @@ silently stretches or artificially upscales output.
 
 ## Project status
 
-Phase 5 is implemented. Linux package assembly remains intentionally deferred to the next phase.
+Phase 5 is implemented, including its SQLite persistence and storage-layout migration. Linux package assembly remains intentionally deferred to the next phase.

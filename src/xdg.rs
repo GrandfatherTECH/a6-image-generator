@@ -1,19 +1,24 @@
-//! Linux desktop identity and XDG directory discovery.
+//! Linux desktop identity and application-directory discovery.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-pub const APP_ID: &str = "io.github.grandfathertech.a6-image-studio";
-pub const APP_DIRECTORY: &str = "a6-image-studio";
+pub const APP_ID: &str = "org.a6studio.A6ImageStudio";
+pub const APP_DIRECTORY: &str = "a6-studio";
+pub const LEGACY_APP_ID: &str = "io.github.grandfathertech.a6-image-studio";
+const LEGACY_APP_DIRECTORY: &str = "a6-image-studio";
+const DATABASE_FILENAME: &str = "a6-studio.sqlite3";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppPaths {
-    config_dir: PathBuf,
-    data_dir: PathBuf,
+    app_dir: PathBuf,
     cache_dir: PathBuf,
     pictures_dir: PathBuf,
+    legacy_config_dir: PathBuf,
+    legacy_data_dir: PathBuf,
+    legacy_cache_dir: PathBuf,
 }
 
 impl AppPaths {
@@ -27,11 +32,11 @@ impl AppPaths {
     }
 
     pub fn config_dir(&self) -> &Path {
-        &self.config_dir
+        &self.app_dir
     }
 
     pub fn data_dir(&self) -> &Path {
-        &self.data_dir
+        &self.app_dir
     }
 
     pub fn cache_dir(&self) -> &Path {
@@ -42,6 +47,22 @@ impl AppPaths {
         &self.pictures_dir
     }
 
+    pub fn database_path(&self) -> PathBuf {
+        self.app_dir.join(DATABASE_FILENAME)
+    }
+
+    pub fn legacy_config_dir(&self) -> &Path {
+        &self.legacy_config_dir
+    }
+
+    pub fn legacy_data_dir(&self) -> &Path {
+        &self.legacy_data_dir
+    }
+
+    pub fn legacy_cache_dir(&self) -> &Path {
+        &self.legacy_cache_dir
+    }
+
     fn from_environment(
         home: Option<OsString>,
         config_home: Option<OsString>,
@@ -50,18 +71,21 @@ impl AppPaths {
         pictures: Option<OsString>,
     ) -> Result<Self, XdgPathError> {
         let home = absolute_path(home).ok_or(XdgPathError::HomeUnavailable)?;
-        let config_home = absolute_path(config_home).unwrap_or_else(|| home.join(".config"));
+        let legacy_config_home = absolute_path(config_home).unwrap_or_else(|| home.join(".config"));
         let data_home = absolute_path(data_home).unwrap_or_else(|| home.join(".local/share"));
         let cache_home = absolute_path(cache_home).unwrap_or_else(|| home.join(".cache"));
         let pictures_dir = absolute_path(pictures)
-            .or_else(|| read_pictures_directory(&config_home, &home))
+            .or_else(|| read_pictures_directory(&legacy_config_home, &home))
             .unwrap_or_else(|| home.join("Pictures"));
+        let app_dir = home.join(".config").join(APP_DIRECTORY);
 
         Ok(Self {
-            config_dir: config_home.join(APP_DIRECTORY),
-            data_dir: data_home.join(APP_DIRECTORY),
-            cache_dir: cache_home.join(APP_DIRECTORY),
+            cache_dir: app_dir.join("cache"),
+            app_dir,
             pictures_dir,
+            legacy_config_dir: legacy_config_home.join(LEGACY_APP_DIRECTORY),
+            legacy_data_dir: data_home.join(LEGACY_APP_DIRECTORY),
+            legacy_cache_dir: cache_home.join(LEGACY_APP_DIRECTORY),
         })
     }
 }
@@ -106,7 +130,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn discovers_all_standard_application_directories() {
+    fn consolidates_application_state_below_home_config() {
         let paths = AppPaths::from_environment(
             Some("/home/tester".into()),
             Some("/var/test-config".into()),
@@ -118,17 +142,33 @@ mod tests {
 
         assert_eq!(
             paths.config_dir(),
-            Path::new("/var/test-config/a6-image-studio")
+            Path::new("/home/tester/.config/a6-studio")
         );
         assert_eq!(
             paths.data_dir(),
-            Path::new("/var/test-data/a6-image-studio")
+            Path::new("/home/tester/.config/a6-studio")
         );
         assert_eq!(
             paths.cache_dir(),
-            Path::new("/var/test-cache/a6-image-studio")
+            Path::new("/home/tester/.config/a6-studio/cache")
+        );
+        assert_eq!(
+            paths.database_path(),
+            Path::new("/home/tester/.config/a6-studio/a6-studio.sqlite3")
         );
         assert_eq!(paths.pictures_dir(), Path::new("/srv/pictures"));
+        assert_eq!(
+            paths.legacy_config_dir(),
+            Path::new("/var/test-config/a6-image-studio")
+        );
+        assert_eq!(
+            paths.legacy_data_dir(),
+            Path::new("/var/test-data/a6-image-studio")
+        );
+        assert_eq!(
+            paths.legacy_cache_dir(),
+            Path::new("/var/test-cache/a6-image-studio")
+        );
     }
 
     #[test]
@@ -144,17 +184,29 @@ mod tests {
 
         assert_eq!(
             paths.config_dir(),
-            Path::new("/home/tester/.config/a6-image-studio")
+            Path::new("/home/tester/.config/a6-studio")
         );
         assert_eq!(
             paths.data_dir(),
-            Path::new("/home/tester/.local/share/a6-image-studio")
+            Path::new("/home/tester/.config/a6-studio")
         );
         assert_eq!(
             paths.cache_dir(),
-            Path::new("/home/tester/.cache/a6-image-studio")
+            Path::new("/home/tester/.config/a6-studio/cache")
         );
         assert_eq!(paths.pictures_dir(), Path::new("/home/tester/Pictures"));
+        assert_eq!(
+            paths.legacy_config_dir(),
+            Path::new("/home/tester/.config/a6-image-studio")
+        );
+        assert_eq!(
+            paths.legacy_data_dir(),
+            Path::new("/home/tester/.local/share/a6-image-studio")
+        );
+        assert_eq!(
+            paths.legacy_cache_dir(),
+            Path::new("/home/tester/.cache/a6-image-studio")
+        );
     }
 
     #[test]

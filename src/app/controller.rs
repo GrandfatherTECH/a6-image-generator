@@ -352,12 +352,10 @@ pub fn run() -> Result<(), GuiError> {
         Err(error) => {
             tracing::error!(%error, "history could not be loaded; starting with an empty view");
             (
-                HistoryRepository::empty(
-                    paths.data_dir().join("history.json"),
-                    paths.data_dir().join("errors.json"),
-                ),
+                HistoryRepository::in_memory()
+                    .map_err(|fallback| GuiError::Bootstrap(fallback.to_string()))?,
                 Some(format!(
-                    "History could not be loaded. New entries can still be recorded: {error}"
+                    "The SQLite history database could not be loaded. New entries will remain in memory for this run: {error}"
                 )),
             )
         }
@@ -460,6 +458,17 @@ fn with_runtime_context<T>(runtime: &Runtime, action: impl FnOnce(Handle) -> T) 
     action(runtime.handle().clone())
 }
 
+fn run_blocking_on_runtime<T, F>(
+    runtime: &Runtime,
+    operation: F,
+) -> Result<T, tokio::task::JoinError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    runtime.block_on(async move { tokio::task::spawn_blocking(operation).await })
+}
+
 fn resolve_initial_credential(runtime: &Runtime) -> (Option<ResolvedApiKey>, Option<String>) {
     match secrets::environment_key() {
         Ok(Some(key)) => return (Some(key), None),
@@ -467,7 +476,7 @@ fn resolve_initial_credential(runtime: &Runtime) -> (Option<ResolvedApiKey>, Opt
         Err(error) => return (None, Some(error.to_string())),
     }
 
-    match runtime.block_on(tokio::task::spawn_blocking(secrets::load_keyring_key)) {
+    match run_blocking_on_runtime(runtime, secrets::load_keyring_key) {
         Ok(Ok(key)) => (key, None),
         Ok(Err(error)) => (
             None,
@@ -2389,6 +2398,16 @@ mod tests {
                 .block_on(task)
                 .expect("blocking task should run in the entered runtime")
         });
+
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn startup_blocking_work_enters_the_runtime_before_spawning() {
+        let runtime = build_worker_runtime().expect("worker runtime should build");
+
+        let value = run_blocking_on_runtime(&runtime, || 42)
+            .expect("startup blocking work should run without a prior runtime context");
 
         assert_eq!(value, 42);
     }

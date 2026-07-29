@@ -111,7 +111,7 @@ component CompactHeader {
             HorizontalLayout {
                 spacing: 10px;
                 Image {
-                    source: @image-url("../assets/icons/hicolor/scalable/apps/io.github.grandfathertech.a6-image-studio.svg");
+                    source: @image-url("../assets/icons/hicolor/scalable/apps/org.a6studio.A6ImageStudio.svg");
                     width: 34px;
                     height: 34px;
                     image-fit: contain;
@@ -1426,7 +1426,7 @@ component SettingsPage {
 
             SectionTitle { text: "Settings"; }
             Text {
-                text: "Ordinary preferences are stored in XDG configuration. The API key is never written to JSON or TOML.";
+                text: "Settings and SQLite history live under ~/.config/a6-studio. The API key remains in Secret Service.";
                 color: Palette.foreground;
                 opacity: 0.72;
                 wrap: word-wrap;
@@ -1659,7 +1659,7 @@ component SettingsPage {
 
 export component AppWindow inherits Window {
     title: "A6 Image Studio";
-    icon: @image-url("../assets/icons/hicolor/scalable/apps/io.github.grandfathertech.a6-image-studio.svg");
+    icon: @image-url("../assets/icons/hicolor/scalable/apps/org.a6studio.A6ImageStudio.svg");
     preferred-width: 1180px;
     preferred-height: 820px;
     min-width: 500px;

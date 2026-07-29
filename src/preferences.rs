@@ -1,7 +1,8 @@
 //! Persistent, non-secret desktop preferences.
 //!
 //! API credentials never enter this module. The JSON document is deliberately
-//! limited to ordinary settings that are safe to keep below XDG_CONFIG_HOME.
+//! limited to ordinary settings that are safe to keep below the application
+//! directory.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -87,6 +88,8 @@ impl Default for AppPreferences {
 #[derive(Clone, Debug)]
 pub struct PreferencesStore {
     path: PathBuf,
+    legacy_path: Option<PathBuf>,
+    legacy_default_output: Option<PathBuf>,
 }
 
 impl PreferencesStore {
@@ -94,11 +97,17 @@ impl PreferencesStore {
         let paths = AppPaths::discover()?;
         Ok(Self {
             path: paths.config_dir().join(SETTINGS_FILENAME),
+            legacy_path: Some(paths.legacy_config_dir().join(SETTINGS_FILENAME)),
+            legacy_default_output: Some(paths.legacy_data_dir().join("outputs")),
         })
     }
 
     pub fn from_path(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            legacy_path: None,
+            legacy_default_output: None,
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -106,9 +115,25 @@ impl PreferencesStore {
     }
 
     pub fn load(&self, defaults: &AppPreferences) -> Result<AppPreferences, PreferencesError> {
-        let bytes = match fs::read(&self.path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(defaults.clone()),
+        let (bytes, migrated_from_legacy) = match fs::read(&self.path) {
+            Ok(bytes) => (bytes, false),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let Some(legacy_path) = self.legacy_path.as_ref() else {
+                    return Ok(defaults.clone());
+                };
+                match fs::read(legacy_path) {
+                    Ok(bytes) => (bytes, true),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        return Ok(defaults.clone());
+                    }
+                    Err(source) => {
+                        return Err(PreferencesError::Io {
+                            path: legacy_path.clone(),
+                            source,
+                        });
+                    }
+                }
+            }
             Err(source) => {
                 return Err(PreferencesError::Io {
                     path: self.path.clone(),
@@ -118,13 +143,27 @@ impl PreferencesStore {
         };
         let mut loaded: AppPreferences =
             serde_json::from_slice(&bytes).map_err(|source| PreferencesError::Json {
-                path: self.path.clone(),
+                path: if migrated_from_legacy {
+                    self.legacy_path
+                        .clone()
+                        .unwrap_or_else(|| self.path.clone())
+                } else {
+                    self.path.clone()
+                },
                 source,
             })?;
-        if loaded.output_directory == AppPreferences::default().output_directory {
+        if loaded.output_directory == AppPreferences::default().output_directory
+            || self
+                .legacy_default_output
+                .as_ref()
+                .is_some_and(|legacy| loaded.output_directory == *legacy)
+        {
             loaded.output_directory = defaults.output_directory.clone();
         }
         loaded.validate()?;
+        if migrated_from_legacy {
+            self.save(&loaded)?;
+        }
         Ok(loaded)
     }
 
@@ -237,5 +276,41 @@ mod tests {
         };
 
         assert!(preferences.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_settings_are_imported_without_deleting_the_source() {
+        let root = temporary_path("legacy-root");
+        let legacy_path = root.join("legacy/settings.json");
+        let new_path = root.join("new/settings.json");
+        let legacy_output = root.join("legacy-outputs");
+        let new_output = root.join("new-outputs");
+        let legacy_store = PreferencesStore::from_path(legacy_path.clone());
+        let legacy_preferences = AppPreferences {
+            output_directory: legacy_output.clone(),
+            ..AppPreferences::default()
+        };
+        legacy_store
+            .save(&legacy_preferences)
+            .expect("legacy settings save");
+
+        let store = PreferencesStore {
+            path: new_path.clone(),
+            legacy_path: Some(legacy_path.clone()),
+            legacy_default_output: Some(legacy_output),
+        };
+        let defaults = AppPreferences {
+            output_directory: new_output.clone(),
+            ..AppPreferences::default()
+        };
+
+        let loaded = store.load(&defaults).expect("legacy settings import");
+
+        assert_eq!(loaded.output_directory, new_output);
+        assert!(legacy_path.is_file());
+        assert!(new_path.is_file());
+        assert_eq!(store.load(&defaults).expect("new settings reload"), loaded);
+
+        let _ = fs::remove_dir_all(root);
     }
 }

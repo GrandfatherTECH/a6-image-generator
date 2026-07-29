@@ -2,7 +2,7 @@
 
 ## Scope and phase discipline
 
-The repository currently implements Phase 5 plus the reviewed Phase 4 UI and response-integrity fixes. The permanent CLI, manually verified generation workflow, explicit state architecture, typed controls, format-aware output persistence, and result actions from earlier phases remain supported. Phase 5 adds validated persistent preferences, optional Secret Service/KWallet credentials, session-grouped generation history, and searchable diagnostic records with sanitized provider responses.
+The repository currently implements Phase 5 plus the reviewed Phase 4 UI and response-integrity fixes. The permanent CLI, manually verified generation workflow, explicit state architecture, typed controls, format-aware output persistence, and result actions from earlier phases remain supported. Phase 5 includes validated persistent preferences, optional Secret Service/KWallet credentials, and transactional SQLite storage for sessions, generation history, and searchable diagnostic records.
 
 The command-line interface is a permanent application surface, not throwaway probe code. Future GUI code should call the library modules rather than duplicate configuration or HTTP behavior.
 
@@ -13,9 +13,9 @@ src/main.rs          CLI parsing, human-readable output, exit status
 build.rs             compiles the external Slint source at build time
 ui/app.slint         responsive multi-section desktop layout and callbacks
 src/config.rs        connection validation, secret masking, request timeout
-src/preferences.rs   non-secret XDG settings and atomic JSON persistence
+src/preferences.rs   non-secret settings and atomic JSON persistence/migration
 src/secrets.rs       environment/keyring credential resolution and mutation
-src/history.rs       session history, error records, search, atomic JSON
+src/history.rs       SQLite sessions/history/errors and legacy JSON migration
 src/generation.rs    typed controls, validation, API values, compatibility flags
 src/api/types.rs     typed gateway requests, responses, and metadata
 src/api/error.rs     structured HTTP and transport error categories
@@ -25,7 +25,7 @@ src/app/state.rs     typed state machine and operation identity
 src/app/controller.rs configuration display, callbacks, workers, presentation
 src/app/actions.rs   Save As, clipboard, and containing-folder integrations
 src/storage/mod.rs   off-thread format conversion and atomic output commits
-src/xdg.rs           stable app ID and XDG config/data/cache/pictures discovery
+src/xdg.rs           stable app ID, consolidated app root, legacy XDG discovery
 assets/              freedesktop scalable and raster application icons
 packaging/           desktop entry and AppStream metadata
 tests/               mock-server transport tests; never real API calls
@@ -58,22 +58,26 @@ Output is written to a uniquely named hidden temporary file in the configured de
 
 ## Settings, credentials, and persistence
 
-`AppPreferences` contains only the base URL, model, defaults, output directory, timeout, and history-retention switch. `PreferencesStore` reads and atomically replaces `settings.json` below `XDG_CONFIG_HOME`; validation happens before a new backend is applied. `A6API_BASE_URL` and `A6API_IMAGE_MODEL` remain explicit process-level overrides and are identified in the UI.
+`AppPreferences` contains only the base URL, model, defaults, output directory, timeout, and history-retention switch. `PreferencesStore` reads and atomically replaces `~/.config/a6-studio/settings.json`; validation happens before a new backend is applied. If that file is absent, the former XDG `a6-image-studio/settings.json` is read once, its old default output path is changed to the new default, and the validated result is atomically written to the new location. `A6API_BASE_URL` and `A6API_IMAGE_MODEL` remain explicit process-level overrides and are identified in the UI.
 
-Credentials are deliberately outside the preferences schema. `secrets` resolves `A6API_KEY` first, then queries keyring 4's native Linux store using the stable application ID and `A6API_KEY` account label. Keyring work runs in `spawn_blocking`; the environment source is never silently migrated. Store and forget are explicit user actions. UI and debug formatting expose only `ApiKey::masked`.
+Credentials are deliberately outside the preferences and SQLite schemas. `secrets` resolves `A6API_KEY` first, then queries keyring 4's native Linux store using service `org.a6-studio.key`, the login username as the account, and the visible label `org.a6-studio.key.<sanitized-login-username>`. `keyring-core` supplies the Secret Service label modifier after keyring 4 initializes the platform-native store. Keyring work runs in `spawn_blocking`; the environment source is never silently migrated. Store and forget are explicit user actions. If the new entry is absent, the former `io.github.grandfathertech.a6-image-studio`/`A6API_KEY` entry is copied and removed only after the replacement succeeds. UI and debug formatting expose only `ApiKey::masked`.
 
-`HistoryRepository` owns two independently clearable, versioned documents below `XDG_DATA_HOME`:
+`HistoryRepository` owns one SQLite database at `~/.config/a6-studio/a6-studio.sqlite3`:
 
-- `history.json` stores output path, prompt, model, sent/omitted settings, UTC timestamp, session ID, decoded dimensions, and request ID.
-- `errors.json` stores operation context, prompt, model, sanitized endpoint, category/summary, UTC timestamp, session ID, request ID, and the captured sanitized non-success response body.
+- `sessions` stores the stable session identifier plus first/last activity timestamps.
+- `generations` stores output path, prompt, model, sent/omitted settings, UTC timestamp, session ID, decoded dimensions, and request ID.
+- `errors` stores operation context, prompt, model, sanitized endpoint, category/summary, UTC timestamp, session ID, request ID, and the captured sanitized non-success response body.
+- `app_metadata` stores import-completion markers.
 
-History never stores encoded image bytes or Base64 response data. A generated file can disappear independently; `HistoryEntry::image_exists` gates preview and folder actions while `StoredGenerationSettings::to_input` still supports prompt/settings restoration. Clearing history removes metadata only.
+The connection enables foreign keys, a five-second busy timeout, WAL mode, and normal synchronous durability. Schema changes use SQLite's `user_version`; a database created by a newer unsupported build is rejected rather than modified. Inserts, retention trimming, clears, and session cleanup are atomic transactions. The in-memory presentation index is updated only after commit, keeping UI reads off the Slint event loop's filesystem path. Generation and error retention remain bounded to 2,000 and 1,000 records.
+
+On first discovery, the repository transactionally imports the former `history.json` and `errors.json` files with `INSERT OR IGNORE`, records an independent completion marker for each source, and leaves both files untouched as recovery backups. Existing generated files are not moved. History never stores encoded image bytes or Base64 response data. A generated file can disappear independently; `HistoryEntry::image_exists` gates preview and folder actions while `StoredGenerationSettings::to_input` still supports prompt/settings restoration. Clearing history removes SQLite metadata only.
 
 HTTP error capture has two bounds: the transient summary is 4096 characters and the persisted sanitized body is at most 1 MiB. The exact active API key is replaced before either form leaves the transport layer. `ApiError::full_response` is implemented only for non-successful HTTP results, so successful Base64 image responses cannot enter diagnostics.
 
 ## Desktop execution model
 
-`app::run` creates a separate multi-thread Tokio runtime for background work, enters its reactor context on the main thread, selects Slint's platform, sets `io.github.grandfathertech.a6-image-studio` before creating a window, and then creates and runs the component there. Keeping the reactor entered for the lifetime of the Slint event loop is important because Linux desktop integrations and the Secret Service stack may acquire Tokio-backed `zbus` behavior through Cargo feature unification even when Slint polls their futures itself. Slint callbacks only validate input, transition application state, update immediate UI properties, and spawn work. They never await network, keyring, decoding, or filesystem operations.
+`app::run` creates a separate multi-thread Tokio runtime for background work, enters its reactor context on the main thread, selects Slint's platform, sets `org.a6studio.A6ImageStudio` before creating a window, and then creates and runs the component there. Keeping the reactor entered for the lifetime of the Slint event loop is important because Linux desktop integrations and the Secret Service stack may acquire Tokio-backed `zbus` behavior through Cargo feature unification even when Slint polls their futures itself. Slint callbacks only validate input, transition application state, update immediate UI properties, and spawn work. They never await network, keyring, decoding, or filesystem operations.
 
 `BackendStore` permits validated Settings changes to atomically replace the active client/model/output-directory bundle without restarting the UI. `DesktopServices` shares preferences, credential state, the backend store, history repository, current session ID, and browser selection. Every process launch receives a fresh session identifier.
 
@@ -111,7 +115,7 @@ before the Winit window is created. KWin can honor that blur hint on Wayland;
 Winit currently leaves it unsupported on X11, where the palette translucency
 remains. The Qt dependency remains optional at Slint's build-detection level.
 
-`AppPaths` follows XDG environment variables with absolute-path validation and home-directory fallbacks. Durable generated files default below the data directory, settings live below the configuration directory, metadata histories live below the data directory, and Save As starts in the user pictures directory.
+`AppPaths` deliberately consolidates application-managed state under `~/.config/a6-studio`: settings and SQLite live at the root, generated files default to `outputs/`, and reserved cache data belongs in `cache/`. It still resolves the XDG pictures directory for Save As and the former XDG config/data/cache roots solely for one-time migration.
 
 The binary has three invocation surfaces:
 
@@ -136,14 +140,14 @@ cargo test --all-targets
 cargo build --release --locked
 ```
 
-Tests use a bounded local HTTP mock server and must not use the real gateway, keyring, or require `A6API_KEY`. Unit tests cover URL normalization, key masking/source labels, endpoint construction, configurable timeout, Base64/URL parsing, malformed responses, full sanitized error capture, documented dimension boundaries, proportional and aspect-changing provider adjustments, optional-field omission, bounded previews, XDG discovery, settings/history round trips, missing output files, recent-result selection, PNG/WebP/JPEG conversion, Save As extension checks, all state transitions, worker abortion, stale-result rejection, and atomic output commits. Integration tests verify request paths, exact `3840x2160` serialization, all generation JSON fields, bearer authentication, response metadata, error categorization, and URL fallback transport.
+Tests use a bounded local HTTP mock server and must not use the real gateway, keyring, or require `A6API_KEY`. Unit tests cover URL normalization, key masking/source labels, the visible per-user keyring label, endpoint construction, configurable timeout, Base64/URL parsing, malformed responses, full sanitized error capture, documented dimension boundaries, proportional and aspect-changing provider adjustments, optional-field omission, bounded previews, consolidated/legacy path discovery, settings migration, SQLite schema/version handling, one-time JSON import, database round trips, missing output files, recent-result selection, PNG/WebP/JPEG conversion, Save As extension checks, all state transitions, worker abortion, stale-result rejection, and atomic output commits. Integration tests verify request paths, exact `3840x2160` serialization, all generation JSON fields, bearer authentication, response metadata, error categorization, and URL fallback transport.
 
 Validate the freedesktop assets as well:
 
 ```bash
-desktop-file-validate packaging/io.github.grandfathertech.a6-image-studio.desktop
-appstreamcli validate --no-net packaging/io.github.grandfathertech.a6-image-studio.metainfo.xml
-xmllint --noout assets/icons/hicolor/scalable/apps/io.github.grandfathertech.a6-image-studio.svg
+desktop-file-validate packaging/org.a6studio.A6ImageStudio.desktop
+appstreamcli validate --no-net packaging/org.a6studio.A6ImageStudio.metainfo.xml
+xmllint --noout assets/icons/hicolor/scalable/apps/org.a6studio.A6ImageStudio.svg
 ```
 
 ## Adding behavior
@@ -152,7 +156,7 @@ xmllint --noout assets/icons/hicolor/scalable/apps/io.github.grandfathertech.a6-
 - Add typed Serde fields rather than assembling or indexing JSON manually.
 - Never add the bearer token to tracing fields, errors, URLs, or default client headers.
 - Preserve the summary/body separation and bounded sanitized response for unexpected HTTP errors.
-- Keep credentials out of settings and history schemas; keyring mutation must remain explicit.
+- Keep credentials out of settings and SQLite schemas; keyring mutation must remain explicit.
 - Put network, decoding, and filesystem work outside Slint callbacks.
 - Return worker results through `upgrade_in_event_loop`; do not access components from worker threads.
 - Preserve cancellation whenever adding an await point to a desktop operation.
@@ -177,8 +181,9 @@ Phase 5 is complete. Later phases complete installation/package assembly in the 
 11. Cancel an active generation, then start a connection test. Verify no late result replaces the newer state.
 12. Repeat the launch, scroll, and clipboard checks under X11 where available.
 13. Open Settings, change each ordinary default and the output directory, save, restart, and verify persistence. Test an invalid/relative output path and out-of-range timeout. If base/model environment overrides are present, verify the UI names them.
-14. With `A6API_KEY` unset, store a test key in the system keyring, restart, and verify the source is `system keyring`. Then set `A6API_KEY`, restart, and verify `environment` takes precedence without migration. `Forget stored key` must not affect the environment key.
-15. Generate entries in two application launches. Search History by prompt, model, path, request ID, timestamp, and session; load an old request into Create. Move one output file and verify the missing-file state preserves prompt/settings but disables file actions. Clear history and confirm image files remain.
+14. With `A6API_KEY` unset, store a test key in the system keyring, restart, and verify the source is `system keyring`. In KeepSecret, verify the visible label is `org.a6-studio.key.<login-username>`. Then set `A6API_KEY`, restart, and verify `environment` takes precedence without copying it. `Forget stored key` must not affect the environment key.
+15. Generate entries in two application launches. Confirm `~/.config/a6-studio/a6-studio.sqlite3` exists, search History by prompt, model, path, request ID, timestamp, and session, and load an old request into Create. Move one output file and verify the missing-file state preserves prompt/settings but disables file actions. Clear history and confirm image files remain.
 16. Trigger a safe local validation failure and a provider HTTP failure. Search Error log by session, prompt, category, request ID, and response text. Verify full captured response text is bound to the correct request, the API key is absent, and clearing the log does not delete outputs.
 17. Launch without either `A6API_KEY` or a stored key and verify the explicit unconfigured state appears without a crash or network request.
 18. Re-run `check` and, only if another billable request is acceptable, `smoke-generate --yes` to confirm the permanent CLI remains functional.
+19. For migration QA, start from copies of the former `settings.json`, `history.json`, and `errors.json` plus the legacy keyring entry. Verify the settings and key are migrated, SQLite imports each JSON source once, the old JSON files remain unchanged, and existing image paths still work.
