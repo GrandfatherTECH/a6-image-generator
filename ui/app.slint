@@ -931,39 +931,20 @@ component HistoryDetail {
                     vertical-alignment: center;
                 }
             }
-            Text {
-                text: root.selected-timestamp + "  ·  " + root.selected-dimensions;
-                color: Palette.foreground;
-                font-weight: 650;
-                overflow: elide;
-            }
-            Text {
-                text: root.selected-prompt;
-                color: Palette.foreground;
-                height: 54px;
+            TextEdit {
+                height: 176px;
+                vertical-stretch: 0;
+                text: "Timestamp: " + root.selected-timestamp
+                    + "\nPrompt: " + root.selected-prompt
+                    + "\nModel: " + root.selected-model
+                    + "\nResolution: " + root.selected-dimensions
+                    + "\nSettings: " + root.selected-settings
+                    + "\nSession ID: " + root.selected-session
+                    + "\nRequest ID: " + root.selected-request-id
+                    + "\nFile path: " + root.selected-path;
+                read-only: true;
                 wrap: word-wrap;
-                overflow: elide;
-            }
-            Text {
-                text: root.selected-model + "  ·  " + root.selected-settings;
-                color: Palette.foreground;
-                opacity: 0.72;
-                height: 40px;
-                wrap: word-wrap;
-                overflow: elide;
-            }
-            Text {
-                text: "Session  " + root.selected-session
-                    + "    ·    Request ID  " + root.selected-request-id;
-                color: Palette.foreground;
-                opacity: 0.68;
-                overflow: elide;
-            }
-            Text {
-                text: root.selected-path;
-                color: Palette.foreground;
-                opacity: 0.68;
-                overflow: elide;
+                accessible-label: "Selectable saved request details";
             }
             HorizontalLayout {
                 spacing: 8px;
@@ -1208,49 +1189,31 @@ component ErrorDetail {
                 color: Palette.foreground;
                 font-weight: 650;
             }
-            Text {
-                text: "Session  " + root.selected-session
-                    + "    ·    Operation  " + root.selected-operation;
-                color: Palette.foreground;
-                opacity: 0.72;
-                overflow: elide;
-            }
-            Text {
-                text: "Model  " + root.selected-model
-                    + "    ·    Request ID  " + root.selected-request-id;
-                color: Palette.foreground;
-                opacity: 0.72;
-                overflow: elide;
-            }
-            Text {
-                text: "Endpoint  " + root.selected-endpoint;
-                color: Palette.foreground;
-                opacity: 0.72;
-                overflow: elide;
-            }
-            Text {
-                text: "Prompt  " + root.selected-prompt;
-                color: Palette.foreground;
-                height: 52px;
+            TextEdit {
+                height: 132px;
+                vertical-stretch: 0;
+                text: "Session ID: " + root.selected-session
+                    + "\nOperation: " + root.selected-operation
+                    + "\nModel: " + root.selected-model
+                    + "\nRequest ID: " + root.selected-request-id
+                    + "\nEndpoint: " + root.selected-endpoint
+                    + "\nPrompt: " + root.selected-prompt;
+                read-only: true;
                 wrap: word-wrap;
-                overflow: elide;
+                accessible-label: "Selectable error request details";
             }
-            Rectangle {
+            Text {
+                text: "Error text";
+                color: Palette.foreground;
+                font-weight: 650;
+            }
+            TextEdit {
                 height: 76px;
-                border-width: 1px;
-                border-color: Palette.border;
-                border-radius: 5px;
-                background: Palette.alternate-background.transparentize(0.08);
-                Text {
-                    x: 8px;
-                    y: 6px;
-                    width: parent.width - 16px;
-                    height: parent.height - 12px;
-                    text: root.selected-summary;
-                    color: Palette.foreground;
-                    wrap: word-wrap;
-                    overflow: elide;
-                }
+                vertical-stretch: 0;
+                text: root.selected-summary;
+                read-only: true;
+                wrap: word-wrap;
+                accessible-label: "Selectable error text";
             }
             Text {
                 text: root.selected-response-truncated
@@ -1266,6 +1229,7 @@ component ErrorDetail {
                 read-only: true;
                 wrap: word-wrap;
                 vertical-stretch: 1;
+                accessible-label: "Selectable full provider response";
             }
         }
     }
@@ -1920,7 +1884,7 @@ export component AppWindow inherits Window {
             }
 
             if root.navigation-value == "A6 Image Studio · History": HistoryPage {
-                width: parent.width;
+                horizontal-stretch: 1;
                 compact: root.compact-layout;
                 sessions: root.history-sessions;
                 generations: root.history-generations;
@@ -1946,7 +1910,7 @@ export component AppWindow inherits Window {
             }
 
             if root.navigation-value == "A6 Image Studio · Error log": ErrorLogPage {
-                width: parent.width;
+                horizontal-stretch: 1;
                 compact: root.compact-layout;
                 entries: root.error-log-items;
                 search-text <=> root.error-search;
@@ -1969,7 +1933,7 @@ export component AppWindow inherits Window {
             }
 
             if root.navigation-value == "A6 Image Studio · Settings": SettingsPage {
-                width: parent.width;
+                horizontal-stretch: 1;
                 compact: root.compact-layout;
                 base-url <=> root.settings-base-url;
                 model-id <=> root.settings-model-id;

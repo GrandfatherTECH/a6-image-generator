@@ -193,7 +193,7 @@ When `Retain local generation history` is enabled, every successful desktop gene
 
 Image bytes and Base64 provider payloads are never duplicated into SQLite. Search matches prompts, models, paths, request IDs, timestamps, and session IDs.
 
-Selecting an entry loads a bounded preview from the original output path. `Load in Create` restores its prompt and settings. If the image was moved or deleted, the interface explains that the file is unavailable, disables file-dependent actions, and still allows the cached prompt/settings to be restored. `Clear history` removes metadata only; it deliberately does not delete generated image files.
+Selecting an entry loads a bounded preview from the original output path. Its prompt, model, resolution, settings, session ID, request ID, and file path are displayed in a read-only selectable field, so complete values or smaller selections can be copied normally. `Load in Create` restores its prompt and settings. If the image was moved or deleted, the interface explains that the file is unavailable, disables file-dependent actions, and still allows the cached prompt/settings to be restored. `Clear history` removes metadata only; it deliberately does not delete generated image files.
 
 Disabling retention stops new successful generations from being appended. Existing metadata remains available until explicitly cleared.
 
@@ -208,7 +208,7 @@ The separate Error log records connection, generation, validation, and other ope
 - a concise summary;
 - the complete captured provider response body, sanitized and bounded to a 1 MiB safety limit.
 
-Search covers all of those fields, including provider response text. The detail pane keeps each response bound to its originating session and request context. It explicitly marks a response that reached the safety limit. Transport failures without an HTTP response show that no body was available.
+Search covers all of those fields, including provider response text. The detail pane keeps each response bound to its originating session and request context. Request metadata, prompt, error text, and provider response use read-only selectable fields for normal full or partial copying. The pane explicitly marks a response that reached the safety limit. Transport failures without an HTTP response show that no body was available.
 
 Successful image responses and Base64 image payloads are never copied into the error log. The active API key is redacted before persistence. `Clear error log` removes the local diagnostic metadata.
 
