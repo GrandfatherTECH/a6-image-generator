@@ -43,6 +43,121 @@ export struct ErrorLogItem {
     selected: bool,
 }
 
+global StudioTheme {
+    out property <brush> panel-background: Palette.alternate-background.transparentize(0.02);
+    out property <brush> well-background: Palette.background.transparentize(0.10);
+    out property <brush> list-background: Palette.alternate-background.transparentize(0.10);
+    out property <brush> hover-background: Palette.accent-background.transparentize(0.90);
+    out property <brush> selected-background: Palette.accent-background.transparentize(0.82);
+    out property <color> shadow-color: #0000002e;
+    out property <length> panel-radius: 12px;
+    out property <length> well-radius: 9px;
+}
+
+// A selected section is instantiated only while visible. This wrapper uses
+// that lifecycle to stage a short bottom-up entrance without delaying input.
+component MotionSurface inherits Rectangle {
+    in property <length> content-height;
+    private property <float> reveal: 0;
+
+    height: root.content-height;
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    background: transparent;
+    clip: false;
+
+    animate height {
+        duration: 240ms;
+        easing: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    entrance-timer := Timer {
+        interval: 1ms;
+        triggered => {
+            self.stop();
+            root.reveal = 1;
+        }
+    }
+
+    animate reveal {
+        duration: 280ms;
+        easing: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    content := Rectangle {
+        y: (1 - root.reveal) * 20px;
+        width: parent.width;
+        height: parent.height;
+        opacity: root.reveal;
+        background: transparent;
+        @children
+    }
+}
+
+// Retains the previous frame long enough to cross-slide it with the newly
+// selected result. Two slots avoid decoding or copying pixels on the UI thread.
+component SlidingImage inherits Rectangle {
+    in property <image> source;
+    in property <string> description: "Image preview";
+    private property <image> first-image;
+    private property <image> second-image;
+    private property <bool> first-visible: true;
+    private property <bool> initialized: false;
+
+    background: transparent;
+    clip: true;
+    accessible-role: image;
+    accessible-label: root.description;
+
+    init => {
+        root.first-image = root.source;
+        root.initialized = true;
+    }
+
+    changed source => {
+        if !root.initialized {
+            root.first-image = root.source;
+            root.initialized = true;
+        } else if root.first-visible {
+            root.second-image = root.source;
+            root.first-visible = false;
+        } else {
+            root.first-image = root.source;
+            root.first-visible = true;
+        }
+    }
+
+    first := Image {
+        x: root.first-visible ? 0px : -root.width * 0.10;
+        width: parent.width;
+        height: parent.height;
+        source: root.first-image;
+        image-fit: contain;
+        opacity: root.first-visible ? 1 : 0;
+        accessible-role: none;
+
+        animate x, opacity {
+            duration: 320ms;
+            easing: cubic-bezier(0.16, 1, 0.3, 1);
+        }
+    }
+
+    second := Image {
+        x: root.first-visible ? root.width * 0.10 : 0px;
+        width: parent.width;
+        height: parent.height;
+        source: root.second-image;
+        image-fit: contain;
+        opacity: root.first-visible ? 0 : 1;
+        accessible-role: none;
+
+        animate x, opacity {
+            duration: 320ms;
+            easing: cubic-bezier(0.16, 1, 0.3, 1);
+        }
+    }
+}
+
 component SectionTitle {
     in property <string> text;
 
@@ -129,6 +244,114 @@ component LabeledChoice {
     }
 }
 
+component NavigationSelector {
+    in-out property <string> current-value;
+    private property <bool> menu-open: false;
+    callback selected(string);
+
+    min-width: 280px;
+    height: 36px;
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+
+    Button {
+        text: root.current-value + (root.menu-open ? "   ▴" : "   ▾");
+        clicked => {
+            if root.menu-open {
+                root.menu-open = false;
+                navigation-menu.close();
+            } else {
+                root.menu-open = true;
+                navigation-menu.show();
+            }
+        }
+    }
+
+    navigation-menu := PopupWindow {
+        x: 0px;
+        y: root.height + 7px;
+        width: min(root.width, 420px);
+        height: 204px;
+        close-policy: close-on-click-outside;
+        forward-focus: menu-focus;
+        private property <float> reveal: root.menu-open ? 1 : 0;
+
+        animate reveal {
+            duration: 190ms;
+            easing: cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        menu-plate := Rectangle {
+            x: 4px;
+            y: 4px + (1 - navigation-menu.reveal) * -14px;
+            width: parent.width - 8px;
+            height: parent.height - 8px;
+            opacity: navigation-menu.reveal;
+            border-width: 1px;
+            border-color: Palette.border;
+            border-radius: StudioTheme.well-radius;
+            background: StudioTheme.panel-background;
+            drop-shadow-blur: 14px;
+            drop-shadow-offset-y: 5px;
+            drop-shadow-color: StudioTheme.shadow-color;
+
+            menu-focus := FocusScope {
+                focus-changed-event => {
+                    if !self.has-focus {
+                        root.menu-open = false;
+                    }
+                }
+
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 5px;
+
+                    Button {
+                        text: "Create";
+                        primary: root.current-value == "A6 Image Studio · Create";
+                        clicked => {
+                            root.current-value = "A6 Image Studio · Create";
+                            root.selected(root.current-value);
+                            root.menu-open = false;
+                            navigation-menu.close();
+                        }
+                    }
+                    Button {
+                        text: "History";
+                        primary: root.current-value == "A6 Image Studio · History";
+                        clicked => {
+                            root.current-value = "A6 Image Studio · History";
+                            root.selected(root.current-value);
+                            root.menu-open = false;
+                            navigation-menu.close();
+                        }
+                    }
+                    Button {
+                        text: "Error log";
+                        primary: root.current-value == "A6 Image Studio · Error log";
+                        clicked => {
+                            root.current-value = "A6 Image Studio · Error log";
+                            root.selected(root.current-value);
+                            root.menu-open = false;
+                            navigation-menu.close();
+                        }
+                    }
+                    Button {
+                        text: "Settings";
+                        primary: root.current-value == "A6 Image Studio · Settings";
+                        clicked => {
+                            root.current-value = "A6 Image Studio · Settings";
+                            root.selected(root.current-value);
+                            root.menu-open = false;
+                            navigation-menu.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 component CompactHeader {
     in property <bool> compact;
     in property <string> connection-status;
@@ -147,8 +370,11 @@ component CompactHeader {
     Rectangle {
         border-width: 1px;
         border-color: Palette.border;
-        border-radius: 8px;
-        background: Palette.alternate-background.transparentize(0.06);
+        border-radius: StudioTheme.panel-radius;
+        background: StudioTheme.panel-background;
+        drop-shadow-blur: 10px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: StudioTheme.shadow-color;
 
         VerticalLayout {
             padding: 12px;
@@ -166,17 +392,16 @@ component CompactHeader {
                 VerticalLayout {
                     spacing: 0px;
                     horizontal-stretch: 1;
-                    ComboBox {
-                        model: [
-                            "A6 Image Studio · Create",
-                            "A6 Image Studio · History",
-                            "A6 Image Studio · Error log",
-                            "A6 Image Studio · Settings"
-                        ];
-                        current-value <=> root.navigation-value;
-                        min-width: 260px;
-                        horizontal-stretch: 0;
-                        selected(value) => { root.navigation-changed(value); }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        horizontal-stretch: 1;
+                        NavigationSelector {
+                            width: 360px;
+                            horizontal-stretch: 0;
+                            current-value <=> root.navigation-value;
+                            selected(value) => { root.navigation-changed(value); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
                     }
                     Text {
                         text: root.model-text + "  ·  " + root.connection-status;
@@ -187,6 +412,9 @@ component CompactHeader {
                 }
                 if !root.compact: Button {
                     text: "Test connection";
+                    width: 150px;
+                    horizontal-stretch: 0;
+                    vertical-stretch: 0;
                     enabled: root.configured && !root.busy;
                     clicked => { root.test-connection(); }
                 }
@@ -251,6 +479,10 @@ component GenerationPanel {
         + (root.send-size && root.experimental-preset ? 24px : 0px)
         + (root.compatibility-expanded ? 100px : 0px)
         + (root.error-text != "" ? 82px : 0px);
+    animate height {
+        duration: 240ms;
+        easing: cubic-bezier(0.16, 1, 0.3, 1);
+    }
     min-width: 360px;
     horizontal-stretch: 0;
     vertical-stretch: 0;
@@ -258,8 +490,11 @@ component GenerationPanel {
     Rectangle {
         border-width: 1px;
         border-color: Palette.border;
-        border-radius: 8px;
-        background: Palette.alternate-background.transparentize(0.06);
+        border-radius: StudioTheme.panel-radius;
+        background: StudioTheme.panel-background;
+        drop-shadow-blur: 10px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: StudioTheme.shadow-color;
 
         VerticalLayout {
             padding: 14px;
@@ -388,8 +623,14 @@ component GenerationPanel {
                 height: root.compatibility-expanded ? 126px : 50px;
                 border-width: 1px;
                 border-color: Palette.border;
-                border-radius: 6px;
-                background: Palette.background;
+                border-radius: StudioTheme.well-radius;
+                background: StudioTheme.well-background;
+                clip: true;
+
+                animate height {
+                    duration: 220ms;
+                    easing: cubic-bezier(0.16, 1, 0.3, 1);
+                }
 
                 VerticalLayout {
                     padding: 8px;
@@ -462,8 +703,8 @@ component GenerationPanel {
                 height: 72px;
                 border-width: 1px;
                 border-color: Palette.border;
-                border-radius: 6px;
-                background: Palette.background;
+                border-radius: StudioTheme.well-radius;
+                background: StudioTheme.well-background;
                 Text {
                     x: 10px;
                     y: 8px;
@@ -518,9 +759,16 @@ component RecentThumbnail {
     Rectangle {
         border-width: root.item.selected ? 2px : 1px;
         border-color: root.item.selected ? Palette.accent-background : Palette.border;
-        border-radius: 6px;
-        background: Palette.background;
+        border-radius: StudioTheme.well-radius;
+        background: root.item.selected
+            ? StudioTheme.selected-background
+            : (thumbnail-touch.has-hover ? StudioTheme.hover-background : StudioTheme.well-background);
         clip: true;
+
+        animate border-width, border-color, background {
+            duration: 160ms;
+            easing: ease-out;
+        }
 
         VerticalLayout {
             padding: 4px;
@@ -540,7 +788,7 @@ component RecentThumbnail {
                 overflow: elide;
             }
         }
-        TouchArea {
+        thumbnail-touch := TouchArea {
             mouse-cursor: pointer;
             clicked => { root.activated(); }
         }
@@ -577,6 +825,10 @@ component ResultPanel {
     height: 706px
         + (root.result-size-warning != "" ? (root.compact ? 108px : 74px) : 0px)
         + (root.details-expanded && root.has-result ? 252px : 0px);
+    animate height {
+        duration: 240ms;
+        easing: cubic-bezier(0.16, 1, 0.3, 1);
+    }
     min-width: 360px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
@@ -584,8 +836,11 @@ component ResultPanel {
     Rectangle {
         border-width: 1px;
         border-color: Palette.border;
-        border-radius: 8px;
-        background: Palette.alternate-background.transparentize(0.06);
+        border-radius: StudioTheme.panel-radius;
+        background: StudioTheme.panel-background;
+        drop-shadow-blur: 10px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: StudioTheme.shadow-color;
 
         VerticalLayout {
             padding: 14px;
@@ -608,8 +863,8 @@ component ResultPanel {
                 height: root.compact ? 96px : 62px;
                 border-width: 1px;
                 border-color: Palette.accent-background;
-                border-radius: 6px;
-                background: Palette.background;
+                border-radius: StudioTheme.well-radius;
+                background: StudioTheme.well-background;
                 clip: true;
 
                 Text {
@@ -630,18 +885,17 @@ component ResultPanel {
                 vertical-stretch: 1;
                 border-width: 1px;
                 border-color: Palette.border;
-                border-radius: 6px;
-                background: Palette.background;
+                border-radius: StudioTheme.well-radius;
+                background: StudioTheme.well-background;
                 clip: true;
 
-                if root.generated-image.width > 0: Image {
+                if root.generated-image.width > 0: SlidingImage {
                     x: 12px;
                     y: 12px;
                     width: parent.width - 24px;
                     height: parent.height - 24px;
                     source: root.generated-image;
-                    image-fit: contain;
-                    accessible-label: "Generated image preview";
+                    description: "Generated image preview";
                 }
 
                 if root.generated-image.width == 0: VerticalLayout {
@@ -688,8 +942,8 @@ component ResultPanel {
                 height: 94px;
                 border-width: 1px;
                 border-color: Palette.border;
-                border-radius: 6px;
-                background: Palette.background.transparentize(0.18);
+                border-radius: StudioTheme.well-radius;
+                background: StudioTheme.well-background;
 
                 VerticalLayout {
                     padding-left: 10px;
@@ -751,8 +1005,8 @@ component ResultPanel {
                     height: 230px;
                     border-width: 1px;
                     border-color: Palette.border;
-                    border-radius: 6px;
-                    background: Palette.background;
+                    border-radius: StudioTheme.well-radius;
+                    background: StudioTheme.well-background;
                     clip: true;
                     VerticalLayout {
                         padding: 10px;
@@ -804,8 +1058,8 @@ component HistorySessionList {
     Rectangle {
         border-width: 1px;
         border-color: Palette.border;
-        border-radius: 6px;
-        background: Palette.background.transparentize(0.12);
+        border-radius: StudioTheme.well-radius;
+        background: StudioTheme.well-background;
 
         VerticalLayout {
             padding: 8px;
@@ -820,10 +1074,17 @@ component HistorySessionList {
                     height: 62px;
                     border-width: session.selected ? 2px : 1px;
                     border-color: session.selected ? Palette.accent-background : Palette.border;
-                    border-radius: 5px;
+                    border-radius: 7px;
                     background: session.selected
-                        ? Palette.accent-background.transparentize(0.82)
-                        : Palette.alternate-background.transparentize(0.12);
+                        ? StudioTheme.selected-background
+                        : (session-touch.has-hover
+                            ? StudioTheme.hover-background
+                            : StudioTheme.list-background);
+
+                    animate border-width, border-color, background {
+                        duration: 160ms;
+                        easing: ease-out;
+                    }
                     VerticalLayout {
                         padding: 8px;
                         spacing: 2px;
@@ -841,7 +1102,7 @@ component HistorySessionList {
                             overflow: elide;
                         }
                     }
-                    TouchArea {
+                    session-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.select-session(session.id); }
                     }
@@ -858,8 +1119,8 @@ component HistoryRequestList {
     Rectangle {
         border-width: 1px;
         border-color: Palette.border;
-        border-radius: 6px;
-        background: Palette.background.transparentize(0.12);
+        border-radius: StudioTheme.well-radius;
+        background: StudioTheme.well-background;
 
         VerticalLayout {
             padding: 8px;
@@ -876,10 +1137,17 @@ component HistoryRequestList {
                     border-color: generation.selected
                         ? Palette.accent-background
                         : Palette.border;
-                    border-radius: 5px;
+                    border-radius: 7px;
                     background: generation.selected
-                        ? Palette.accent-background.transparentize(0.82)
-                        : Palette.alternate-background.transparentize(0.12);
+                        ? StudioTheme.selected-background
+                        : (request-touch.has-hover
+                            ? StudioTheme.hover-background
+                            : StudioTheme.list-background);
+
+                    animate border-width, border-color, background {
+                        duration: 160ms;
+                        easing: ease-out;
+                    }
                     VerticalLayout {
                         padding: 7px;
                         spacing: 2px;
@@ -905,7 +1173,7 @@ component HistoryRequestList {
                             overflow: elide;
                         }
                     }
-                    TouchArea {
+                    request-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.select-generation(generation.id); }
                     }
@@ -933,8 +1201,8 @@ component HistoryDetail {
     Rectangle {
         border-width: 1px;
         border-color: Palette.border;
-        border-radius: 6px;
-        background: Palette.background.transparentize(0.12);
+        border-radius: StudioTheme.well-radius;
+        background: StudioTheme.well-background;
 
         if !root.has-selection: VerticalLayout {
             alignment: center;
@@ -954,17 +1222,16 @@ component HistoryDetail {
                 vertical-stretch: 1;
                 border-width: 1px;
                 border-color: Palette.border;
-                border-radius: 5px;
-                background: Palette.alternate-background.transparentize(0.1);
+                border-radius: 7px;
+                background: StudioTheme.list-background;
                 clip: true;
-                if root.selected-file-available: Image {
+                if root.selected-file-available: SlidingImage {
                     x: 8px;
                     y: 8px;
                     width: parent.width - 16px;
                     height: parent.height - 16px;
                     source: root.selected-preview;
-                    image-fit: contain;
-                    accessible-label: "Selected history image";
+                    description: "Selected history image";
                 }
                 if !root.selected-file-available: Text {
                     x: 12px;
@@ -1056,8 +1323,11 @@ component HistoryPage {
     Rectangle {
         border-width: 1px;
         border-color: Palette.border;
-        border-radius: 8px;
-        background: Palette.alternate-background.transparentize(0.05);
+        border-radius: StudioTheme.panel-radius;
+        background: StudioTheme.panel-background;
+        drop-shadow-blur: 10px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: StudioTheme.shadow-color;
 
         VerticalLayout {
             padding: 16px;
@@ -1166,8 +1436,8 @@ component ErrorEntryList {
     Rectangle {
         border-width: 1px;
         border-color: Palette.border;
-        border-radius: 6px;
-        background: Palette.background.transparentize(0.12);
+        border-radius: StudioTheme.well-radius;
+        background: StudioTheme.well-background;
         VerticalLayout {
             padding: 8px;
             spacing: 7px;
@@ -1183,10 +1453,17 @@ component ErrorEntryList {
                     border-color: entry.selected
                         ? Palette.accent-background
                         : Palette.border;
-                    border-radius: 5px;
+                    border-radius: 7px;
                     background: entry.selected
-                        ? Palette.accent-background.transparentize(0.82)
-                        : Palette.alternate-background.transparentize(0.12);
+                        ? StudioTheme.selected-background
+                        : (entry-touch.has-hover
+                            ? StudioTheme.hover-background
+                            : StudioTheme.list-background);
+
+                    animate border-width, border-color, background {
+                        duration: 160ms;
+                        easing: ease-out;
+                    }
                     VerticalLayout {
                         padding: 7px;
                         spacing: 2px;
@@ -1204,7 +1481,7 @@ component ErrorEntryList {
                             overflow: elide;
                         }
                     }
-                    TouchArea {
+                    entry-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.select-entry(entry.id); }
                     }
@@ -1231,8 +1508,8 @@ component ErrorDetail {
     Rectangle {
         border-width: 1px;
         border-color: Palette.border;
-        border-radius: 6px;
-        background: Palette.background.transparentize(0.12);
+        border-radius: StudioTheme.well-radius;
+        background: StudioTheme.well-background;
 
         if !root.has-selection: VerticalLayout {
             alignment: center;
@@ -1279,8 +1556,8 @@ component ErrorDetail {
                 height: 76px;
                 border-width: 1px;
                 border-color: Palette.border;
-                border-radius: 5px;
-                background: Palette.alternate-background.transparentize(0.08);
+                border-radius: 7px;
+                background: StudioTheme.list-background;
                 SelectableText {
                     x: 8px;
                     y: 6px;
@@ -1340,8 +1617,11 @@ component ErrorLogPage {
     Rectangle {
         border-width: 1px;
         border-color: Palette.border;
-        border-radius: 8px;
-        background: Palette.alternate-background.transparentize(0.05);
+        border-radius: StudioTheme.panel-radius;
+        background: StudioTheme.panel-background;
+        drop-shadow-blur: 10px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: StudioTheme.shadow-color;
 
         VerticalLayout {
             padding: 16px;
@@ -1458,8 +1738,11 @@ component SettingsPage {
     Rectangle {
         border-width: 1px;
         border-color: Palette.border;
-        border-radius: 8px;
-        background: Palette.alternate-background.transparentize(0.05);
+        border-radius: StudioTheme.panel-radius;
+        background: StudioTheme.panel-background;
+        drop-shadow-blur: 10px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: StudioTheme.shadow-color;
 
         VerticalLayout {
             padding: 18px;
@@ -1620,8 +1903,8 @@ component SettingsPage {
                 height: 188px;
                 border-width: 1px;
                 border-color: Palette.border;
-                border-radius: 6px;
-                background: Palette.background.transparentize(0.12);
+                border-radius: StudioTheme.well-radius;
+                background: StudioTheme.well-background;
 
                 VerticalLayout {
                     padding: 12px;
@@ -1681,8 +1964,8 @@ component SettingsPage {
                 height: 58px;
                 border-width: 1px;
                 border-color: Palette.border;
-                border-radius: 5px;
-                background: Palette.background.transparentize(0.12);
+                border-radius: 7px;
+                background: StudioTheme.well-background;
                 Text {
                     x: 9px;
                     y: 6px;
@@ -1708,6 +1991,19 @@ export component AppWindow inherits Window {
     background: Palette.background.transparentize(0.18);
 
     property <bool> compact-layout: root.width < 900px;
+    private property <length> generation-panel-height: 540px
+        + (root.send-size && root.size-value == "Custom…" ? 98px : 0px)
+        + (root.send-size
+            && (root.size-value == "2048x2048"
+                || root.size-value == "3840x2160"
+                || root.size-value == "2160x3840")
+            ? 24px
+            : 0px)
+        + (root.compatibility-expanded ? 100px : 0px)
+        + (root.error-text != "" ? 82px : 0px);
+    private property <length> result-panel-height: 706px
+        + (root.result-size-warning != "" ? (root.compact-layout ? 108px : 74px) : 0px)
+        + (root.details-expanded && root.has-result ? 252px : 0px);
     in-out property <string> navigation-value: "A6 Image Studio · Create";
 
     in-out property <string> prompt: "A single solid blue circle centered on a plain white background";
@@ -1847,189 +2143,204 @@ export component AppWindow inherits Window {
                 navigation-changed(value) => { root.navigation-changed(value); }
             }
 
-            if root.navigation-value == "A6 Image Studio · Create" && !root.compact-layout: HorizontalLayout {
-                spacing: 14px;
-                GenerationPanel {
-                    width: 430px;
-                    compact: false;
-                    prompt <=> root.prompt;
-                    size-value <=> root.size-value;
-                    quality-value <=> root.quality-value;
-                    background-value <=> root.background-value;
-                    output-format-value <=> root.output-format-value;
-                    custom-width <=> root.custom-width;
-                    custom-height <=> root.custom-height;
-                    dimension-status: root.dimension-status;
-                    send-size <=> root.send-size;
-                    send-quality <=> root.send-quality;
-                    send-background <=> root.send-background;
-                    send-output-format <=> root.send-output-format;
-                    compatibility-expanded <=> root.compatibility-expanded;
-                    error-text: root.error-text;
-                    operation-status: root.connection-status;
-                    busy: root.busy;
-                    configured: root.configured;
-                    custom-dimensions-changed(width, height) => {
-                        root.custom-dimensions-changed(width, height);
+            if root.navigation-value == "A6 Image Studio · Create" && !root.compact-layout: MotionSurface {
+                content-height: max(root.generation-panel-height, root.result-panel-height);
+                HorizontalLayout {
+                    spacing: 14px;
+                    GenerationPanel {
+                        width: 430px;
+                        compact: false;
+                        prompt <=> root.prompt;
+                        size-value <=> root.size-value;
+                        quality-value <=> root.quality-value;
+                        background-value <=> root.background-value;
+                        output-format-value <=> root.output-format-value;
+                        custom-width <=> root.custom-width;
+                        custom-height <=> root.custom-height;
+                        dimension-status: root.dimension-status;
+                        send-size <=> root.send-size;
+                        send-quality <=> root.send-quality;
+                        send-background <=> root.send-background;
+                        send-output-format <=> root.send-output-format;
+                        compatibility-expanded <=> root.compatibility-expanded;
+                        error-text: root.error-text;
+                        operation-status: root.connection-status;
+                        busy: root.busy;
+                        configured: root.configured;
+                        custom-dimensions-changed(width, height) => {
+                            root.custom-dimensions-changed(width, height);
+                        }
+                        generate-image => { root.generate-image(); }
+                        cancel-operation => { root.cancel-operation(); }
                     }
-                    generate-image => { root.generate-image(); }
-                    cancel-operation => { root.cancel-operation(); }
-                }
-                ResultPanel {
-                    compact: false;
-                    generated-image: root.generated-image;
-                    recent-items: root.recent-items;
-                    has-result: root.has-result;
-                    busy: root.busy;
-                    action-busy: root.action-busy;
-                    operation-status: root.connection-status;
-                    action-status: root.action-status;
-                    result-duration: root.result-duration;
-                    result-dimensions: root.result-dimensions;
-                    result-file-size: root.result-file-size;
-                    result-format: root.result-format;
-                    result-path: root.result-path;
-                    result-prompt: root.result-prompt;
-                    result-request-id: root.result-request-id;
-                    result-settings: root.result-settings;
-                    result-size-warning: root.result-size-warning;
-                    details-expanded <=> root.details-expanded;
-                    save-as => { root.save-as(); }
-                    copy-image => { root.copy-image(); }
-                    copy-prompt => { root.copy-prompt(root.result-prompt); }
-                    regenerate => { root.regenerate(); }
-                    open-containing-folder => { root.open-containing-folder(); }
-                    select-recent(index) => { root.select-recent(index); }
-                }
-            }
-
-            if root.navigation-value == "A6 Image Studio · Create" && root.compact-layout: VerticalLayout {
-                spacing: 14px;
-                GenerationPanel {
-                    width: parent.width;
-                    compact: true;
-                    prompt <=> root.prompt;
-                    size-value <=> root.size-value;
-                    quality-value <=> root.quality-value;
-                    background-value <=> root.background-value;
-                    output-format-value <=> root.output-format-value;
-                    custom-width <=> root.custom-width;
-                    custom-height <=> root.custom-height;
-                    dimension-status: root.dimension-status;
-                    send-size <=> root.send-size;
-                    send-quality <=> root.send-quality;
-                    send-background <=> root.send-background;
-                    send-output-format <=> root.send-output-format;
-                    compatibility-expanded <=> root.compatibility-expanded;
-                    error-text: root.error-text;
-                    operation-status: root.connection-status;
-                    busy: root.busy;
-                    configured: root.configured;
-                    custom-dimensions-changed(width, height) => {
-                        root.custom-dimensions-changed(width, height);
+                    ResultPanel {
+                        compact: false;
+                        generated-image: root.generated-image;
+                        recent-items: root.recent-items;
+                        has-result: root.has-result;
+                        busy: root.busy;
+                        action-busy: root.action-busy;
+                        operation-status: root.connection-status;
+                        action-status: root.action-status;
+                        result-duration: root.result-duration;
+                        result-dimensions: root.result-dimensions;
+                        result-file-size: root.result-file-size;
+                        result-format: root.result-format;
+                        result-path: root.result-path;
+                        result-prompt: root.result-prompt;
+                        result-request-id: root.result-request-id;
+                        result-settings: root.result-settings;
+                        result-size-warning: root.result-size-warning;
+                        details-expanded <=> root.details-expanded;
+                        save-as => { root.save-as(); }
+                        copy-image => { root.copy-image(); }
+                        copy-prompt => { root.copy-prompt(root.result-prompt); }
+                        regenerate => { root.regenerate(); }
+                        open-containing-folder => { root.open-containing-folder(); }
+                        select-recent(index) => { root.select-recent(index); }
                     }
-                    generate-image => { root.generate-image(); }
-                    cancel-operation => { root.cancel-operation(); }
-                }
-                ResultPanel {
-                    width: parent.width;
-                    compact: true;
-                    generated-image: root.generated-image;
-                    recent-items: root.recent-items;
-                    has-result: root.has-result;
-                    busy: root.busy;
-                    action-busy: root.action-busy;
-                    operation-status: root.connection-status;
-                    action-status: root.action-status;
-                    result-duration: root.result-duration;
-                    result-dimensions: root.result-dimensions;
-                    result-file-size: root.result-file-size;
-                    result-format: root.result-format;
-                    result-path: root.result-path;
-                    result-prompt: root.result-prompt;
-                    result-request-id: root.result-request-id;
-                    result-settings: root.result-settings;
-                    result-size-warning: root.result-size-warning;
-                    details-expanded <=> root.details-expanded;
-                    save-as => { root.save-as(); }
-                    copy-image => { root.copy-image(); }
-                    copy-prompt => { root.copy-prompt(root.result-prompt); }
-                    regenerate => { root.regenerate(); }
-                    open-containing-folder => { root.open-containing-folder(); }
-                    select-recent(index) => { root.select-recent(index); }
                 }
             }
 
-            if root.navigation-value == "A6 Image Studio · History": HistoryPage {
-                horizontal-stretch: 1;
-                compact: root.compact-layout;
-                sessions: root.history-sessions;
-                generations: root.history-generations;
-                search-text <=> root.history-search;
-                has-selection: root.history-has-selection;
-                selected-file-available: root.history-file-available;
-                selected-preview: root.history-preview;
-                selected-timestamp: root.history-selected-timestamp;
-                selected-session: root.history-selected-session;
-                selected-prompt: root.history-selected-prompt;
-                selected-model: root.history-selected-model;
-                selected-settings: root.history-selected-settings;
-                selected-dimensions: root.history-selected-dimensions;
-                selected-path: root.history-selected-path;
-                selected-request-id: root.history-selected-request-id;
-                status-text: root.history-status;
-                search-changed(value) => { root.history-search-changed(value); }
-                select-session(id) => { root.history-select-session(id); }
-                select-generation(id) => { root.history-select-generation(id); }
-                use-selected => { root.history-use-selected(); }
-                open-selected-folder => { root.history-open-selected-folder(); }
-                clear-history => { root.clear-history(); }
+            if root.navigation-value == "A6 Image Studio · Create" && root.compact-layout: MotionSurface {
+                content-height: root.generation-panel-height + 14px + root.result-panel-height;
+                VerticalLayout {
+                    spacing: 14px;
+                    GenerationPanel {
+                        width: parent.width;
+                        compact: true;
+                        prompt <=> root.prompt;
+                        size-value <=> root.size-value;
+                        quality-value <=> root.quality-value;
+                        background-value <=> root.background-value;
+                        output-format-value <=> root.output-format-value;
+                        custom-width <=> root.custom-width;
+                        custom-height <=> root.custom-height;
+                        dimension-status: root.dimension-status;
+                        send-size <=> root.send-size;
+                        send-quality <=> root.send-quality;
+                        send-background <=> root.send-background;
+                        send-output-format <=> root.send-output-format;
+                        compatibility-expanded <=> root.compatibility-expanded;
+                        error-text: root.error-text;
+                        operation-status: root.connection-status;
+                        busy: root.busy;
+                        configured: root.configured;
+                        custom-dimensions-changed(width, height) => {
+                            root.custom-dimensions-changed(width, height);
+                        }
+                        generate-image => { root.generate-image(); }
+                        cancel-operation => { root.cancel-operation(); }
+                    }
+                    ResultPanel {
+                        width: parent.width;
+                        compact: true;
+                        generated-image: root.generated-image;
+                        recent-items: root.recent-items;
+                        has-result: root.has-result;
+                        busy: root.busy;
+                        action-busy: root.action-busy;
+                        operation-status: root.connection-status;
+                        action-status: root.action-status;
+                        result-duration: root.result-duration;
+                        result-dimensions: root.result-dimensions;
+                        result-file-size: root.result-file-size;
+                        result-format: root.result-format;
+                        result-path: root.result-path;
+                        result-prompt: root.result-prompt;
+                        result-request-id: root.result-request-id;
+                        result-settings: root.result-settings;
+                        result-size-warning: root.result-size-warning;
+                        details-expanded <=> root.details-expanded;
+                        save-as => { root.save-as(); }
+                        copy-image => { root.copy-image(); }
+                        copy-prompt => { root.copy-prompt(root.result-prompt); }
+                        regenerate => { root.regenerate(); }
+                        open-containing-folder => { root.open-containing-folder(); }
+                        select-recent(index) => { root.select-recent(index); }
+                    }
+                }
             }
 
-            if root.navigation-value == "A6 Image Studio · Error log": ErrorLogPage {
-                horizontal-stretch: 1;
-                compact: root.compact-layout;
-                entries: root.error-log-items;
-                search-text <=> root.error-search;
-                has-selection: root.error-has-selection;
-                selected-timestamp: root.error-selected-timestamp;
-                selected-session: root.error-selected-session;
-                selected-operation: root.error-selected-operation;
-                selected-category: root.error-selected-category;
-                selected-prompt: root.error-selected-prompt;
-                selected-model: root.error-selected-model;
-                selected-endpoint: root.error-selected-endpoint;
-                selected-request-id: root.error-selected-request-id;
-                selected-summary: root.error-selected-summary;
-                selected-full-response: root.error-selected-full-response;
-                selected-response-truncated: root.error-selected-response-truncated;
-                status-text: root.error-log-status;
-                search-changed(value) => { root.error-search-changed(value); }
-                select-entry(id) => { root.error-select-entry(id); }
-                clear-errors => { root.clear-errors(); }
+            if root.navigation-value == "A6 Image Studio · History": MotionSurface {
+                content-height: root.compact-layout ? 1330px : 720px;
+                HistoryPage {
+                    horizontal-stretch: 1;
+                    compact: root.compact-layout;
+                    sessions: root.history-sessions;
+                    generations: root.history-generations;
+                    search-text <=> root.history-search;
+                    has-selection: root.history-has-selection;
+                    selected-file-available: root.history-file-available;
+                    selected-preview: root.history-preview;
+                    selected-timestamp: root.history-selected-timestamp;
+                    selected-session: root.history-selected-session;
+                    selected-prompt: root.history-selected-prompt;
+                    selected-model: root.history-selected-model;
+                    selected-settings: root.history-selected-settings;
+                    selected-dimensions: root.history-selected-dimensions;
+                    selected-path: root.history-selected-path;
+                    selected-request-id: root.history-selected-request-id;
+                    status-text: root.history-status;
+                    search-changed(value) => { root.history-search-changed(value); }
+                    select-session(id) => { root.history-select-session(id); }
+                    select-generation(id) => { root.history-select-generation(id); }
+                    use-selected => { root.history-use-selected(); }
+                    open-selected-folder => { root.history-open-selected-folder(); }
+                    clear-history => { root.clear-history(); }
+                }
             }
 
-            if root.navigation-value == "A6 Image Studio · Settings": SettingsPage {
-                horizontal-stretch: 1;
-                compact: root.compact-layout;
-                base-url <=> root.settings-base-url;
-                model-id <=> root.settings-model-id;
-                default-size <=> root.settings-default-size;
-                default-quality <=> root.settings-default-quality;
-                default-format <=> root.settings-default-format;
-                output-directory <=> root.settings-output-directory;
-                request-timeout <=> root.settings-request-timeout;
-                retain-history <=> root.settings-retain-history;
-                api-key-entry <=> root.settings-api-key-entry;
-                api-key-source: root.settings-api-key-source;
-                api-key-mask: root.settings-api-key-mask;
-                override-note: root.settings-override-note;
-                status-text: root.settings-status;
-                busy: root.settings-busy;
-                save-settings => { root.save-settings(); }
-                choose-output-directory => { root.choose-output-directory(); }
-                store-api-key => { root.store-api-key(); }
-                forget-api-key => { root.forget-api-key(); }
+            if root.navigation-value == "A6 Image Studio · Error log": MotionSurface {
+                content-height: root.compact-layout ? 1080px : 720px;
+                ErrorLogPage {
+                    horizontal-stretch: 1;
+                    compact: root.compact-layout;
+                    entries: root.error-log-items;
+                    search-text <=> root.error-search;
+                    has-selection: root.error-has-selection;
+                    selected-timestamp: root.error-selected-timestamp;
+                    selected-session: root.error-selected-session;
+                    selected-operation: root.error-selected-operation;
+                    selected-category: root.error-selected-category;
+                    selected-prompt: root.error-selected-prompt;
+                    selected-model: root.error-selected-model;
+                    selected-endpoint: root.error-selected-endpoint;
+                    selected-request-id: root.error-selected-request-id;
+                    selected-summary: root.error-selected-summary;
+                    selected-full-response: root.error-selected-full-response;
+                    selected-response-truncated: root.error-selected-response-truncated;
+                    status-text: root.error-log-status;
+                    search-changed(value) => { root.error-search-changed(value); }
+                    select-entry(id) => { root.error-select-entry(id); }
+                    clear-errors => { root.clear-errors(); }
+                }
+            }
+
+            if root.navigation-value == "A6 Image Studio · Settings": MotionSurface {
+                content-height: root.compact-layout ? 1040px : 720px;
+                SettingsPage {
+                    horizontal-stretch: 1;
+                    compact: root.compact-layout;
+                    base-url <=> root.settings-base-url;
+                    model-id <=> root.settings-model-id;
+                    default-size <=> root.settings-default-size;
+                    default-quality <=> root.settings-default-quality;
+                    default-format <=> root.settings-default-format;
+                    output-directory <=> root.settings-output-directory;
+                    request-timeout <=> root.settings-request-timeout;
+                    retain-history <=> root.settings-retain-history;
+                    api-key-entry <=> root.settings-api-key-entry;
+                    api-key-source: root.settings-api-key-source;
+                    api-key-mask: root.settings-api-key-mask;
+                    override-note: root.settings-override-note;
+                    status-text: root.settings-status;
+                    busy: root.settings-busy;
+                    save-settings => { root.save-settings(); }
+                    choose-output-directory => { root.choose-output-directory(); }
+                    store-api-key => { root.store-api-key(); }
+                    forget-api-key => { root.forget-api-key(); }
+                }
             }
         }
     }

@@ -19,6 +19,7 @@ A6 Image Studio is a Linux desktop and command-line image-generation client for 
 - Display request duration, requested and actual dimensions, encoded file size, format, path, and request ID.
 - Report proportional provider-adjusted output sizes without treating them as failures, while still warning when the returned aspect ratio changes.
 - Switch among the six most recent results from the current session.
+- Move between Create, History, Error log, and Settings with a compact animated app switcher; section cards enter gently from below and image changes use a bounded cross-slide.
 - Consolidate application-managed settings, cache, output defaults, and the SQLite database below `~/.config/a6-studio/`.
 - Optionally store the API key in Secret Service/KWallet under the visible per-user label `org.a6-studio.key.<username>`; environment credentials always take precedence.
 - Keep transactional, searchable SQLite generation history grouped by application session, restore old prompts/settings even when an image file has been moved or deleted, and clear metadata without deleting generated images.

@@ -81,7 +81,9 @@ The compact header displays the normalized endpoint, masked API key, configured 
 - `Error log`
 - `Settings`
 
-The interface follows the system light/dark palette and font. Wide Create windows place the prompt/settings panel beside a large preview canvas; narrower windows stack the same panels vertically. History and Error log likewise change from columns to vertically scrollable cards, and Settings stacks fields that would otherwise become cramped. The complete window remains in a vertical scroll view, so every control is reachable at the minimum window size.
+The interface follows the system light/dark palette and font. Its restrained plate hierarchy uses rounded surfaces, subtle borders, and shallow shadows rather than decorative clutter. Wide Create windows place the prompt/settings panel beside a large preview canvas; narrower windows stack the same panels vertically. History and Error log likewise change from columns to vertically scrollable cards, and Settings stacks fields that would otherwise become cramped. The complete window remains in a vertical scroll view, so every control is reachable at the minimum window size.
+
+The app-name control opens an animated section menu. Create, History, Error log, and Settings enter with a short upward reveal, expandable cards resize smoothly, and switching between generated or saved images cross-slides the old and new previews. These transitions affect presentation only: they never delay API work, image decoding, persistence, or input handling.
 
 `Test connection` calls the models endpoint and reports its HTTP status and whether the configured model is listed. A model missing from that list does not necessarily mean image generation is unavailable.
 
