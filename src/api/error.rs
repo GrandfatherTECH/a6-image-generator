@@ -1,3 +1,8 @@
+//! Structured transport, HTTP, and response-validation failures.
+//!
+//! Public errors expose sanitized summaries and bounded non-success response
+//! bodies. Successful image payloads are never available through error APIs.
+
 use std::error::Error as StdError;
 
 use reqwest::StatusCode;
@@ -5,6 +10,7 @@ use thiserror::Error;
 
 use super::ResponseMetadata;
 
+/// Transport failure category suitable for user-facing diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkFailure {
     Dns,
@@ -26,6 +32,7 @@ impl NetworkFailure {
     }
 }
 
+/// HTTP status category used to decide retry behavior and display labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpFailure {
     Authentication,
@@ -45,6 +52,7 @@ impl HttpFailure {
     }
 }
 
+/// Sanitized failure from transport, HTTP, or response decoding.
 #[derive(Debug, Error)]
 pub enum ApiError {
     #[error("{kind:?}: {source}")]
@@ -109,6 +117,33 @@ impl ApiError {
             }
             _ => None,
         }
+    }
+
+    pub(crate) fn is_retryable(&self) -> bool {
+        match self {
+            Self::Transport { kind, .. } => matches!(
+                kind,
+                NetworkFailure::Dns
+                    | NetworkFailure::Timeout
+                    | NetworkFailure::Connection
+                    | NetworkFailure::Request
+            ),
+            Self::Http { kind, .. } => {
+                matches!(kind, HttpFailure::RateLimited | HttpFailure::Server)
+            }
+            Self::UnsupportedEndpoint { .. }
+            | Self::InvalidJson { .. }
+            | Self::MissingImageData
+            | Self::InvalidBase64(_)
+            | Self::InvalidImageUrl(_)
+            | Self::UnsupportedImageUrlScheme(_)
+            | Self::ResponseTooLarge { .. }
+            | Self::EndpointConstruction => false,
+        }
+    }
+
+    pub(crate) fn retry_after(&self) -> Option<&str> {
+        self.metadata()?.retry_after.as_deref()
     }
 
     /// Returns the sanitized provider response body for non-successful HTTP

@@ -3,6 +3,7 @@
 pub mod api;
 pub mod app;
 pub mod config;
+mod diagnostics;
 pub mod domain;
 pub mod generation;
 pub mod history;

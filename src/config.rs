@@ -1,3 +1,8 @@
+//! Validated gateway configuration and non-disclosing API-key handling.
+//!
+//! [`ApiKey`] intentionally exposes the secret only within this crate. Its
+//! `Debug` implementation always redacts the value.
+
 use std::env;
 use std::fmt;
 use std::time::Duration;
@@ -5,10 +10,17 @@ use std::time::Duration;
 use thiserror::Error;
 use url::Url;
 
+/// Default OpenAI-compatible gateway root.
 pub const DEFAULT_BASE_URL: &str = "https://api.a6api.com";
+/// Default image-generation model identifier.
 pub const DEFAULT_IMAGE_MODEL: &str = "gpt-image-2";
+/// Default overall timeout for one HTTP attempt.
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Validated API credential with redacted formatting.
+///
+/// The raw value is accessible only within this crate for authorization and
+/// explicit redaction. Callers should use [`ApiKey::masked`] for display.
 #[derive(Clone)]
 pub struct ApiKey(String);
 
@@ -48,6 +60,7 @@ impl fmt::Debug for ApiKey {
     }
 }
 
+/// Fully validated connection configuration used to build an API client.
 #[derive(Clone)]
 pub struct Config {
     api_key: ApiKey,
@@ -148,6 +161,7 @@ impl fmt::Debug for Config {
     }
 }
 
+/// Invalid or unavailable connection configuration.
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("A6API_KEY is required and must not be empty")]

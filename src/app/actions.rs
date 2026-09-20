@@ -1,3 +1,8 @@
+//! Desktop file-dialog, clipboard, and containing-folder actions.
+//!
+//! External clipboard and folder commands are invoked directly without a
+//! shell, and file copies use the storage module's atomic write path.
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -117,6 +122,25 @@ pub(crate) async fn choose_output_directory() -> Option<PathBuf> {
         .pick_folder()
         .await
         .map(|handle| handle.path().to_owned())
+}
+
+pub(crate) async fn export_diagnostics(
+    report: Vec<u8>,
+) -> Result<Option<PathBuf>, ResultActionError> {
+    let mut dialog = rfd::AsyncFileDialog::new()
+        .set_title("Export sanitized diagnostics")
+        .set_file_name("a6-image-studio-diagnostics.json")
+        .add_filter("JSON diagnostic report", &["json"]);
+    if let Ok(paths) = AppPaths::discover() {
+        dialog = dialog.set_directory(paths.pictures_dir());
+    }
+
+    let Some(handle) = dialog.save_file().await else {
+        return Ok(None);
+    };
+    let destination = handle.path().to_owned();
+    storage::write_bytes_atomic(&destination, &report).await?;
+    Ok(Some(destination))
 }
 
 fn normalized_destination(

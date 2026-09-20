@@ -1,3 +1,8 @@
+//! Operation-identified application state transitions.
+//!
+//! Completions are accepted only for the currently active operation ID, which
+//! prevents cancelled or stale asynchronous work from replacing newer state.
+
 use crate::api::{ModelsCheck, ResponseMetadata};
 use crate::domain::GeneratedImage;
 

@@ -8,11 +8,12 @@ use keyring::v1::{Entry, Error as KeyringError};
 use thiserror::Error;
 
 use crate::config::{ApiKey, ConfigError};
-use crate::xdg::LEGACY_APP_ID;
+const KEYRING_SERVICE: &str = "io.github.grandfathertech.A6ImageStudio.key";
+const PREVIOUS_KEYRING_SERVICE: &str = "org.a6-studio.key";
+const ORIGINAL_KEYRING_SERVICE: &str = "io.github.grandfathertech.a6-image-studio";
+const ORIGINAL_KEYRING_USERNAME: &str = "A6API_KEY";
 
-const KEYRING_SERVICE: &str = "org.a6-studio.key";
-const LEGACY_KEYRING_USERNAME: &str = "A6API_KEY";
-
+/// Origin of the credential currently active in the desktop application.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ApiKeySource {
     Environment,
@@ -28,12 +29,14 @@ impl ApiKeySource {
     }
 }
 
+/// Validated API key together with its precedence source.
 #[derive(Clone, Debug)]
 pub struct ResolvedApiKey {
     pub key: ApiKey,
     pub source: ApiKeySource,
 }
 
+/// Read and validate `A6API_KEY` without consulting the desktop keyring.
 pub fn environment_key() -> Result<Option<ResolvedApiKey>, SecretError> {
     match env::var("A6API_KEY") {
         Ok(value) => Ok(Some(ResolvedApiKey {
@@ -45,6 +48,7 @@ pub fn environment_key() -> Result<Option<ResolvedApiKey>, SecretError> {
     }
 }
 
+/// Read the current keyring entry, then compatible legacy entries if absent.
 pub fn load_keyring_key() -> Result<Option<ResolvedApiKey>, SecretError> {
     let entry = keyring_entry()?;
     match entry.get_password() {
@@ -52,46 +56,47 @@ pub fn load_keyring_key() -> Result<Option<ResolvedApiKey>, SecretError> {
             key: ApiKey::from_secret(value)?,
             source: ApiKeySource::Keyring,
         })),
-        Err(KeyringError::NoEntry) => migrate_legacy_keyring_key(),
+        Err(KeyringError::NoEntry) => load_legacy_keyring_key(),
         Err(source) => Err(SecretError::Keyring(source)),
     }
 }
 
+/// Store a validated credential under the current per-user keyring identity.
+///
+/// Legacy entries are removed only after the new write succeeds.
 pub fn store_keyring_key(value: impl Into<String>) -> Result<ApiKey, SecretError> {
     let key = ApiKey::from_secret(value)?;
     keyring_entry()?
         .set_password(key.expose())
         .map_err(SecretError::Keyring)?;
-    remove_legacy_keyring_key_best_effort();
+    remove_legacy_keyring_keys_best_effort();
     Ok(key)
 }
 
+/// Remove current and legacy application-owned keyring entries.
+///
+/// Returns `true` when at least one entry was removed.
 pub fn forget_keyring_key() -> Result<bool, SecretError> {
     let removed_current = delete_if_present(&keyring_entry()?)?;
-    let removed_legacy = delete_if_present(&legacy_keyring_entry()?)?;
-    Ok(removed_current || removed_legacy)
+    let removed_previous = delete_if_present(&previous_keyring_entry()?)?;
+    let removed_original = delete_if_present(&original_keyring_entry()?)?;
+    Ok(removed_current || removed_previous || removed_original)
 }
 
-fn migrate_legacy_keyring_key() -> Result<Option<ResolvedApiKey>, SecretError> {
-    let legacy = legacy_keyring_entry()?;
-    let value = match legacy.get_password() {
-        Ok(value) => value,
-        Err(KeyringError::NoEntry) => return Ok(None),
-        Err(source) => return Err(SecretError::Keyring(source)),
-    };
-    let key = ApiKey::from_secret(value)?;
-    keyring_entry()?
-        .set_password(key.expose())
-        .map_err(SecretError::Keyring)?;
-    if let Err(error) = legacy.delete_credential()
-        && !matches!(error, KeyringError::NoEntry)
-    {
-        tracing::warn!(%error, "API key migrated, but the legacy keyring entry could not be removed");
+fn load_legacy_keyring_key() -> Result<Option<ResolvedApiKey>, SecretError> {
+    for entry in [previous_keyring_entry()?, original_keyring_entry()?] {
+        match entry.get_password() {
+            Ok(value) => {
+                return Ok(Some(ResolvedApiKey {
+                    key: ApiKey::from_secret(value)?,
+                    source: ApiKeySource::Keyring,
+                }));
+            }
+            Err(KeyringError::NoEntry) => {}
+            Err(source) => return Err(SecretError::Keyring(source)),
+        }
     }
-    Ok(Some(ResolvedApiKey {
-        key,
-        source: ApiKeySource::Keyring,
-    }))
+    Ok(None)
 }
 
 fn keyring_entry() -> Result<Entry, SecretError> {
@@ -108,8 +113,12 @@ fn keyring_entry() -> Result<Entry, SecretError> {
     Ok(Entry { inner })
 }
 
-fn legacy_keyring_entry() -> Result<Entry, SecretError> {
-    Entry::new(LEGACY_APP_ID, LEGACY_KEYRING_USERNAME).map_err(SecretError::Keyring)
+fn previous_keyring_entry() -> Result<Entry, SecretError> {
+    Entry::new(PREVIOUS_KEYRING_SERVICE, &login_username()?).map_err(SecretError::Keyring)
+}
+
+fn original_keyring_entry() -> Result<Entry, SecretError> {
+    Entry::new(ORIGINAL_KEYRING_SERVICE, ORIGINAL_KEYRING_USERNAME).map_err(SecretError::Keyring)
 }
 
 fn delete_if_present(entry: &Entry) -> Result<bool, SecretError> {
@@ -120,10 +129,12 @@ fn delete_if_present(entry: &Entry) -> Result<bool, SecretError> {
     }
 }
 
-fn remove_legacy_keyring_key_best_effort() {
-    let result = legacy_keyring_entry().and_then(|entry| delete_if_present(&entry));
-    if let Err(error) = result {
-        tracing::warn!(%error, "new API key was stored, but the legacy keyring entry could not be removed");
+fn remove_legacy_keyring_keys_best_effort() {
+    for entry in [previous_keyring_entry(), original_keyring_entry()] {
+        let result = entry.and_then(|entry| delete_if_present(&entry));
+        if let Err(error) = result {
+            tracing::warn!(%error, "new API key was stored, but a legacy keyring entry could not be removed");
+        }
     }
 }
 
@@ -157,6 +168,7 @@ fn keyring_label(username: &str) -> String {
     format!("{KEYRING_SERVICE}.{component}")
 }
 
+/// Environment, identity, validation, or keyring failure.
 #[derive(Debug, Error)]
 pub enum SecretError {
     #[error("A6API_KEY contains non-Unicode data")]
@@ -183,11 +195,11 @@ mod tests {
     fn visible_keyring_label_uses_the_requested_username_shape() {
         assert_eq!(
             keyring_label("grandfathertech"),
-            "org.a6-studio.key.grandfathertech"
+            "io.github.grandfathertech.A6ImageStudio.key.grandfathertech"
         );
         assert_eq!(
             keyring_label("studio user"),
-            "org.a6-studio.key.studio-user"
+            "io.github.grandfathertech.A6ImageStudio.key.studio-user"
         );
     }
 }

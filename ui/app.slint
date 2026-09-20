@@ -98,7 +98,7 @@ component MotionSurface inherits Rectangle {
 // selected result. Two slots avoid decoding or copying pixels on the UI thread.
 component SlidingImage inherits Rectangle {
     in property <image> source;
-    in property <string> description: "Image preview";
+    in property <string> description: @tr("Image preview");
     private property <image> first-image;
     private property <image> second-image;
     private property <bool> first-visible: true;
@@ -180,7 +180,7 @@ component SelectableText inherits Rectangle {
     in property <int> text-weight: 400;
     in property <TextWrap> text-wrap: no-wrap;
     in property <TextVerticalAlignment> vertical-text-alignment: center;
-    in property <string> description: "Selectable text";
+    in property <string> description: @tr("Selectable text");
 
     min-height: 20px;
     horizontal-stretch: 1;
@@ -191,12 +191,12 @@ component SelectableText inherits Rectangle {
     ContextMenuArea {
         Menu {
             MenuItem {
-                title: "Copy";
+                title: @tr("Copy");
                 enabled: root.text != "";
                 activated => { selectable.copy(); }
             }
             MenuItem {
-                title: "Select All";
+                title: @tr("Select All");
                 enabled: root.text != "";
                 activated => { selectable.select-all(); }
             }
@@ -239,6 +239,7 @@ component LabeledChoice {
             model: root.choices;
             current-value <=> root.value;
             enabled: root.enabled;
+            accessible-label: root.label;
             selected(value) => { root.selected(value); }
         }
     }
@@ -247,6 +248,13 @@ component LabeledChoice {
 component NavigationSelector {
     in-out property <string> current-value;
     private property <bool> menu-open: false;
+    private property <float> menu-reveal: 0;
+    private property <string> current-label:
+        root.current-value == "A6 Image Studio · Create" ? @tr("Create")
+        : root.current-value == "A6 Image Studio · History" ? @tr("History")
+        : root.current-value == "A6 Image Studio · Error log" ? @tr("Error log")
+        : root.current-value == "A6 Image Studio · Settings" ? @tr("Settings")
+        : root.current-value;
     callback selected(string);
 
     min-width: 280px;
@@ -255,14 +263,28 @@ component NavigationSelector {
     vertical-stretch: 0;
 
     Button {
-        text: root.current-value + (root.menu-open ? "   ▴" : "   ▾");
+        width: parent.width;
+        text: root.current-label + (root.menu-open ? "   ▴" : "   ▾");
         clicked => {
             if root.menu-open {
                 root.menu-open = false;
+                root.menu-reveal = 0;
                 navigation-menu.close();
             } else {
                 root.menu-open = true;
+                root.menu-reveal = 0;
                 navigation-menu.show();
+                open-timer.start();
+            }
+        }
+    }
+
+    open-timer := Timer {
+        interval: 1ms;
+        triggered => {
+            self.stop();
+            if root.menu-open {
+                root.menu-reveal = 1;
             }
         }
     }
@@ -274,19 +296,13 @@ component NavigationSelector {
         height: 204px;
         close-policy: close-on-click-outside;
         forward-focus: menu-focus;
-        private property <float> reveal: root.menu-open ? 1 : 0;
-
-        animate reveal {
-            duration: 190ms;
-            easing: cubic-bezier(0.16, 1, 0.3, 1);
-        }
 
         menu-plate := Rectangle {
             x: 4px;
-            y: 4px + (1 - navigation-menu.reveal) * -14px;
+            y: 4px + (1 - root.menu-reveal) * -14px;
             width: parent.width - 8px;
             height: parent.height - 8px;
-            opacity: navigation-menu.reveal;
+            opacity: root.menu-reveal;
             border-width: 1px;
             border-color: Palette.border;
             border-radius: StudioTheme.well-radius;
@@ -294,6 +310,11 @@ component NavigationSelector {
             drop-shadow-blur: 14px;
             drop-shadow-offset-y: 5px;
             drop-shadow-color: StudioTheme.shadow-color;
+
+            animate y, opacity {
+                duration: 190ms;
+                easing: cubic-bezier(0.16, 1, 0.3, 1);
+            }
 
             menu-focus := FocusScope {
                 focus-changed-event => {
@@ -307,7 +328,7 @@ component NavigationSelector {
                     spacing: 5px;
 
                     Button {
-                        text: "Create";
+                        text: @tr("Create");
                         primary: root.current-value == "A6 Image Studio · Create";
                         clicked => {
                             root.current-value = "A6 Image Studio · Create";
@@ -317,7 +338,7 @@ component NavigationSelector {
                         }
                     }
                     Button {
-                        text: "History";
+                        text: @tr("History");
                         primary: root.current-value == "A6 Image Studio · History";
                         clicked => {
                             root.current-value = "A6 Image Studio · History";
@@ -327,7 +348,7 @@ component NavigationSelector {
                         }
                     }
                     Button {
-                        text: "Error log";
+                        text: @tr("Error log");
                         primary: root.current-value == "A6 Image Studio · Error log";
                         clicked => {
                             root.current-value = "A6 Image Studio · Error log";
@@ -337,7 +358,7 @@ component NavigationSelector {
                         }
                     }
                     Button {
-                        text: "Settings";
+                        text: @tr("Settings");
                         primary: root.current-value == "A6 Image Studio · Settings";
                         clicked => {
                             root.current-value = "A6 Image Studio · Settings";
@@ -349,6 +370,7 @@ component NavigationSelector {
                 }
             }
         }
+
     }
 }
 
@@ -383,25 +405,20 @@ component CompactHeader {
             HorizontalLayout {
                 spacing: 10px;
                 Image {
-                    source: @image-url("../assets/icons/hicolor/scalable/apps/org.a6studio.A6ImageStudio.svg");
+                    source: @image-url("../assets/icons/hicolor/scalable/apps/io.github.grandfathertech.A6ImageStudio.svg");
                     width: 34px;
                     height: 34px;
                     image-fit: contain;
-                    accessible-label: "A6 Image Studio icon";
+                    accessible-label: @tr("A6 Image Studio icon");
                 }
                 VerticalLayout {
                     spacing: 0px;
                     horizontal-stretch: 1;
-                    HorizontalLayout {
-                        spacing: 0px;
-                        horizontal-stretch: 1;
-                        NavigationSelector {
-                            width: 360px;
-                            horizontal-stretch: 0;
-                            current-value <=> root.navigation-value;
-                            selected(value) => { root.navigation-changed(value); }
-                        }
-                        Rectangle { horizontal-stretch: 1; }
+                    NavigationSelector {
+                        width: 320px;
+                        horizontal-stretch: 0;
+                        current-value <=> root.navigation-value;
+                        selected(value) => { root.navigation-changed(value); }
                     }
                     Text {
                         text: root.model-text + "  ·  " + root.connection-status;
@@ -411,7 +428,7 @@ component CompactHeader {
                     }
                 }
                 if !root.compact: Button {
-                    text: "Test connection";
+                    text: @tr("Test connection");
                     width: 150px;
                     horizontal-stretch: 0;
                     vertical-stretch: 0;
@@ -422,7 +439,7 @@ component CompactHeader {
 
             if root.compact: HorizontalLayout {
                 Button {
-                    text: "Test connection";
+                    text: @tr("Test connection");
                     enabled: root.configured && !root.busy;
                     horizontal-stretch: 0;
                     clicked => { root.test-connection(); }
@@ -431,7 +448,7 @@ component CompactHeader {
             }
 
             Text {
-                text: "Endpoint  " + root.endpoint-text + "    ·    API key  " + root.api-key-status;
+                text: @tr("Endpoint  {}    ·    API key  {}", root.endpoint-text, root.api-key-status);
                 color: Palette.foreground;
                 opacity: 0.82;
                 overflow: elide;
@@ -500,23 +517,24 @@ component GenerationPanel {
             padding: 14px;
             spacing: 12px;
 
-            SectionTitle { text: "Create"; }
+            SectionTitle { text: @tr("Create"); }
             Text {
-                text: "Describe the image, then choose how it should be rendered.";
+                text: @tr("Describe the image, then choose how it should be rendered.");
                 color: Palette.foreground;
                 opacity: 0.72;
                 wrap: word-wrap;
             }
             TextEdit {
                 text <=> root.prompt;
-                placeholder-text: "Describe the image you want to generate";
+                placeholder-text: @tr("Describe the image you want to generate");
+                accessible-label: @tr("Image description prompt");
                 min-height: 142px;
                 enabled: !root.busy;
                 wrap: word-wrap;
             }
 
             Text {
-                text: "Generation settings";
+                text: @tr("Generation settings");
                 color: Palette.foreground;
                 font-weight: 650;
             }
@@ -524,7 +542,7 @@ component GenerationPanel {
             HorizontalLayout {
                 spacing: 12px;
                 if root.send-size: LabeledChoice {
-                    label: "Dimensions";
+                    label: @tr("Dimensions");
                     choices: [
                         "auto",
                         "1024x1024",
@@ -548,7 +566,7 @@ component GenerationPanel {
                     }
                 }
                 if root.send-quality: LabeledChoice {
-                    label: "Quality";
+                    label: @tr("Quality");
                     choices: ["auto", "low", "medium", "high"];
                     value <=> root.quality-value;
                     enabled: !root.busy;
@@ -561,13 +579,14 @@ component GenerationPanel {
                     spacing: 12px;
                     VerticalLayout {
                         spacing: 4px;
-                        Text { text: "Width"; color: Palette.foreground; font-weight: 600; }
+                        Text { text: @tr("Width"); color: Palette.foreground; font-weight: 600; }
                         SpinBox {
                             minimum: 16;
                             maximum: 3840;
                             step-size: 16;
                             value <=> root.custom-width;
                             enabled: !root.busy;
+                            accessible-label: @tr("Custom image width");
                             edited => {
                                 root.custom-dimensions-changed(root.custom-width, root.custom-height);
                             }
@@ -575,13 +594,14 @@ component GenerationPanel {
                     }
                     VerticalLayout {
                         spacing: 4px;
-                        Text { text: "Height"; color: Palette.foreground; font-weight: 600; }
+                        Text { text: @tr("Height"); color: Palette.foreground; font-weight: 600; }
                         SpinBox {
                             minimum: 16;
                             maximum: 3840;
                             step-size: 16;
                             value <=> root.custom-height;
                             enabled: !root.busy;
+                            accessible-label: @tr("Custom image height");
                             edited => {
                                 root.custom-dimensions-changed(root.custom-width, root.custom-height);
                             }
@@ -597,7 +617,7 @@ component GenerationPanel {
             }
 
             if root.send-size && root.experimental-preset: Text {
-                text: "Experimental: this preset exceeds 2560×1440 total pixels.";
+                text: @tr("Experimental: this preset exceeds 2560×1440 total pixels.");
                 color: Palette.foreground;
                 opacity: 0.72;
                 wrap: word-wrap;
@@ -606,13 +626,13 @@ component GenerationPanel {
             HorizontalLayout {
                 spacing: 12px;
                 if root.send-background: LabeledChoice {
-                    label: "Background";
+                    label: @tr("Background");
                     choices: ["auto", "opaque", "transparent"];
                     value <=> root.background-value;
                     enabled: !root.busy;
                 }
                 if root.send-output-format: LabeledChoice {
-                    label: "Output format";
+                    label: @tr("Output format");
                     choices: ["PNG", "WebP", "JPEG"];
                     value <=> root.output-format-value;
                     enabled: !root.busy;
@@ -642,8 +662,8 @@ component GenerationPanel {
                         Button {
                             height: 32px;
                             text: root.compatibility-expanded
-                                ? "Compatibility settings  ▲"
-                                : "Compatibility settings  ▼";
+                                ? @tr("Compatibility settings  ▲")
+                                : @tr("Compatibility settings  ▼");
                             enabled: !root.busy;
                             horizontal-stretch: 0;
                             vertical-stretch: 0;
@@ -654,43 +674,28 @@ component GenerationPanel {
                         Rectangle { horizontal-stretch: 1; }
                     }
 
-                    if root.compatibility-expanded: HorizontalLayout {
-                        spacing: 16px;
-                        Rectangle {
-                            horizontal-stretch: 1;
+                    if root.compatibility-expanded: GridLayout {
+                        spacing: 8px;
+                        Row {
                             CheckBox {
-                                width: parent.width;
-                                text: "Send dimensions";
+                                text: @tr("Send dimensions");
                                 checked <=> root.send-size;
                                 enabled: !root.busy;
                             }
-                        }
-                        Rectangle {
-                            horizontal-stretch: 1;
                             CheckBox {
-                                width: parent.width;
-                                text: "Send quality";
+                                text: @tr("Send quality");
                                 checked <=> root.send-quality;
                                 enabled: !root.busy;
                             }
                         }
-                    }
-                    if root.compatibility-expanded: HorizontalLayout {
-                        spacing: 16px;
-                        Rectangle {
-                            horizontal-stretch: 1;
+                        Row {
                             CheckBox {
-                                width: parent.width;
-                                text: "Send background";
+                                text: @tr("Send background");
                                 checked <=> root.send-background;
                                 enabled: !root.busy;
                             }
-                        }
-                        Rectangle {
-                            horizontal-stretch: 1;
                             CheckBox {
-                                width: parent.width;
-                                text: "Send output format";
+                                text: @tr("Send output format");
                                 checked <=> root.send-output-format;
                                 enabled: !root.busy;
                             }
@@ -714,7 +719,7 @@ component GenerationPanel {
                     color: Palette.foreground;
                     wrap: word-wrap;
                     overflow: elide;
-                    accessible-label: "Error: " + root.error-text;
+                    accessible-label: @tr("Error: {}", root.error-text);
                 }
             }
 
@@ -726,7 +731,7 @@ component GenerationPanel {
                     indeterminate: true;
                 }
                 Text {
-                    text: root.busy ? root.operation-status : "Generation may be billable";
+                    text: root.busy ? root.operation-status : @tr("Generation may be billable");
                     color: Palette.foreground;
                     opacity: 0.76;
                     vertical-alignment: center;
@@ -734,12 +739,12 @@ component GenerationPanel {
                     overflow: elide;
                 }
                 Button {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     enabled: root.busy;
                     clicked => { root.cancel-operation(); }
                 }
                 Button {
-                    text: "Generate";
+                    text: @tr("Generate");
                     primary: true;
                     enabled: root.configured && !root.busy;
                     clicked => { root.generate-image(); }
@@ -757,8 +762,10 @@ component RecentThumbnail {
     height: 86px;
 
     Rectangle {
-        border-width: root.item.selected ? 2px : 1px;
-        border-color: root.item.selected ? Palette.accent-background : Palette.border;
+        border-width: root.item.selected || thumbnail-focus.has-focus ? 2px : 1px;
+        border-color: root.item.selected || thumbnail-focus.has-focus
+            ? Palette.accent-background
+            : Palette.border;
         border-radius: StudioTheme.well-radius;
         background: root.item.selected
             ? StudioTheme.selected-background
@@ -778,7 +785,7 @@ component RecentThumbnail {
                 image-fit: contain;
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
-                accessible-label: "Recent generated image " + root.item.label;
+                accessible-label: @tr("Recent generated image {}", root.item.label);
             }
             Text {
                 text: root.item.label;
@@ -790,7 +797,23 @@ component RecentThumbnail {
         }
         thumbnail-touch := TouchArea {
             mouse-cursor: pointer;
-            clicked => { root.activated(); }
+            clicked => {
+                thumbnail-focus.focus();
+                root.activated();
+            }
+        }
+        thumbnail-focus := FocusScope {
+            x: 0;
+            width: 0;
+            accessible-role: button;
+            accessible-label: @tr("Select recent generated image {}", root.item.label);
+            key-pressed(event) => {
+                if event.text == " " || event.text == "\n" {
+                    root.activated();
+                    return accept;
+                }
+                return reject;
+            }
         }
     }
 }
@@ -848,7 +871,7 @@ component ResultPanel {
 
             HorizontalLayout {
                 SectionTitle {
-                    text: root.has-result ? "Preview" : "Canvas";
+                    text: root.has-result ? @tr("Preview") : @tr("Canvas");
                     horizontal-stretch: 1;
                 }
                 if root.has-result: Text {
@@ -876,7 +899,7 @@ component ResultPanel {
                     color: Palette.foreground;
                     wrap: word-wrap;
                     overflow: elide;
-                    accessible-label: "Provider size information: " + root.result-size-warning;
+                    accessible-label: @tr("Provider size information: {}", root.result-size-warning);
                 }
             }
 
@@ -895,7 +918,7 @@ component ResultPanel {
                     width: parent.width - 24px;
                     height: parent.height - 24px;
                     source: root.generated-image;
-                    description: "Generated image preview";
+                    description: @tr("Generated image preview");
                 }
 
                 if root.generated-image.width == 0: VerticalLayout {
@@ -903,8 +926,8 @@ component ResultPanel {
                     spacing: 8px;
                     Text {
                         text: root.generating
-                            ? "Preview will appear when generation completes"
-                            : "Your generated image will appear here";
+                            ? @tr("Preview will appear when generation completes")
+                            : @tr("Your generated image will appear here");
                         color: Palette.foreground;
                         font-size: 17px;
                         font-weight: 600;
@@ -912,8 +935,8 @@ component ResultPanel {
                     }
                     Text {
                         text: root.generating
-                            ? "Progress is shown beside the generation controls."
-                            : "Choose a prompt and settings, then select Generate.";
+                            ? @tr("Progress is shown beside the generation controls.")
+                            : @tr("Choose a prompt and settings, then select Generate.");
                         color: Palette.foreground;
                         opacity: 0.64;
                         horizontal-alignment: center;
@@ -924,7 +947,7 @@ component ResultPanel {
             if root.recent-items.length > 0: VerticalLayout {
                 spacing: 7px;
                 Text {
-                    text: "Recent this session";
+                    text: @tr("Recent this session");
                     color: Palette.foreground;
                     font-weight: 600;
                 }
@@ -955,21 +978,23 @@ component ResultPanel {
                     HorizontalLayout {
                         spacing: 8px;
                         Button {
-                            text: root.details-expanded ? "Request details  ▴" : "Request details  ▾";
+                            text: root.details-expanded
+                                ? @tr("Request details  ▴")
+                                : @tr("Request details  ▾");
                             clicked => { root.details-expanded = !root.details-expanded; }
                         }
                         Button {
-                            text: "Save As…";
+                            text: @tr("Save As…");
                             enabled: !root.action-busy;
                             clicked => { root.save-as(); }
                         }
                         Button {
-                            text: "Copy image";
+                            text: @tr("Copy image");
                             enabled: !root.action-busy;
                             clicked => { root.copy-image(); }
                         }
                         Button {
-                            text: "Copy prompt";
+                            text: @tr("Copy prompt");
                             enabled: !root.action-busy;
                             clicked => { root.copy-prompt(); }
                         }
@@ -979,12 +1004,12 @@ component ResultPanel {
                     HorizontalLayout {
                         spacing: 8px;
                         Button {
-                            text: "Regenerate";
+                            text: @tr("Regenerate");
                             enabled: !root.busy && !root.action-busy;
                             clicked => { root.regenerate(); }
                         }
                         Button {
-                            text: "Open folder";
+                            text: @tr("Open folder");
                             enabled: !root.action-busy;
                             clicked => { root.open-containing-folder(); }
                         }
@@ -1013,7 +1038,7 @@ component ResultPanel {
                         spacing: 5px;
                         Text {
                             height: 48px;
-                            text: "Prompt  " + root.result-prompt;
+                            text: @tr("Prompt  {}", root.result-prompt);
                             color: Palette.foreground;
                             wrap: word-wrap;
                             overflow: elide;
@@ -1027,20 +1052,23 @@ component ResultPanel {
                         }
                         Text {
                             height: 22px;
-                            text: "Duration  " + root.result-duration
-                                + "    ·    File size  " + root.result-file-size;
+                            text: @tr(
+                                "Duration  {}    ·    File size  {}",
+                                root.result-duration,
+                                root.result-file-size
+                            );
                             color: Palette.foreground;
                             overflow: elide;
                         }
                         Text {
                             height: 22px;
-                            text: "Request ID  " + root.result-request-id;
+                            text: @tr("Request ID  {}", root.result-request-id);
                             color: Palette.foreground;
                             overflow: elide;
                         }
                         Text {
                             height: 40px;
-                            text: "Saved to  " + root.result-path;
+                            text: @tr("Saved to  {}", root.result-path);
                             color: Palette.foreground;
                             wrap: word-wrap;
                             overflow: elide;
@@ -1065,15 +1093,17 @@ component HistorySessionList {
             padding: 8px;
             spacing: 7px;
             Text {
-                text: "Sessions";
+                text: @tr("Sessions");
                 color: Palette.foreground;
                 font-weight: 650;
             }
             ListView {
                 for session in root.sessions: Rectangle {
                     height: 62px;
-                    border-width: session.selected ? 2px : 1px;
-                    border-color: session.selected ? Palette.accent-background : Palette.border;
+                    border-width: session.selected || session-focus.has-focus ? 2px : 1px;
+                    border-color: session.selected || session-focus.has-focus
+                        ? Palette.accent-background
+                        : Palette.border;
                     border-radius: 7px;
                     background: session.selected
                         ? StudioTheme.selected-background
@@ -1104,7 +1134,23 @@ component HistorySessionList {
                     }
                     session-touch := TouchArea {
                         mouse-cursor: pointer;
-                        clicked => { root.select-session(session.id); }
+                        clicked => {
+                            session-focus.focus();
+                            root.select-session(session.id);
+                        }
+                    }
+                    session-focus := FocusScope {
+                        x: 0;
+                        width: 0;
+                        accessible-role: button;
+                        accessible-label: @tr("Select history session {}", session.title);
+                        key-pressed(event) => {
+                            if event.text == " " || event.text == "\n" {
+                                root.select-session(session.id);
+                                return accept;
+                            }
+                            return reject;
+                        }
                     }
                 }
             }
@@ -1126,15 +1172,15 @@ component HistoryRequestList {
             padding: 8px;
             spacing: 7px;
             Text {
-                text: "Requests in session";
+                text: @tr("Requests in session");
                 color: Palette.foreground;
                 font-weight: 650;
             }
             ListView {
                 for generation in root.generations: Rectangle {
                     height: 88px;
-                    border-width: generation.selected ? 2px : 1px;
-                    border-color: generation.selected
+                    border-width: generation.selected || request-focus.has-focus ? 2px : 1px;
+                    border-color: generation.selected || request-focus.has-focus
                         ? Palette.accent-background
                         : Palette.border;
                     border-radius: 7px;
@@ -1166,7 +1212,7 @@ component HistoryRequestList {
                         Text {
                             text: generation.available
                                 ? generation.model
-                                : "Image file missing  ·  " + generation.model;
+                                : @tr("Image file missing  ·  {}", generation.model);
                             color: generation.available ? Palette.foreground : #e8a04b;
                             opacity: 0.72;
                             font-size: 12px;
@@ -1175,7 +1221,23 @@ component HistoryRequestList {
                     }
                     request-touch := TouchArea {
                         mouse-cursor: pointer;
-                        clicked => { root.select-generation(generation.id); }
+                        clicked => {
+                            request-focus.focus();
+                            root.select-generation(generation.id);
+                        }
+                    }
+                    request-focus := FocusScope {
+                        x: 0;
+                        width: 0;
+                        accessible-role: button;
+                        accessible-label: @tr("Select generated image request {}", generation.timestamp);
+                        key-pressed(event) => {
+                            if event.text == " " || event.text == "\n" {
+                                root.select-generation(generation.id);
+                                return accept;
+                            }
+                            return reject;
+                        }
                     }
                 }
             }
@@ -1207,7 +1269,7 @@ component HistoryDetail {
         if !root.has-selection: VerticalLayout {
             alignment: center;
             Text {
-                text: "Choose a saved request to inspect it.";
+                text: @tr("Choose a saved request to inspect it.");
                 color: Palette.foreground;
                 opacity: 0.66;
                 horizontal-alignment: center;
@@ -1231,13 +1293,13 @@ component HistoryDetail {
                     width: parent.width - 16px;
                     height: parent.height - 16px;
                     source: root.selected-preview;
-                    description: "Selected history image";
+                    description: @tr("Selected history image");
                 }
                 if !root.selected-file-available: Text {
                     x: 12px;
                     width: parent.width - 24px;
                     height: parent.height;
-                    text: "The generated image was deleted or moved. Its prompt and metadata remain available, but image actions are disabled.";
+                    text: @tr("The generated image was deleted or moved. Its prompt and metadata remain available, but image actions are disabled.");
                     color: #e8a04b;
                     wrap: word-wrap;
                     horizontal-alignment: center;
@@ -1247,14 +1309,14 @@ component HistoryDetail {
             SelectableText {
                 text: root.selected-timestamp + "  ·  " + root.selected-dimensions;
                 text-weight: 650;
-                description: "Saved request timestamp and resolution";
+                description: @tr("Saved request timestamp and resolution");
             }
             SelectableText {
                 text: root.selected-prompt;
                 height: 54px;
                 text-wrap: word-wrap;
                 vertical-text-alignment: top;
-                description: "Saved request prompt";
+                description: @tr("Saved request prompt");
             }
             SelectableText {
                 text: root.selected-model + "  ·  " + root.selected-settings;
@@ -1262,27 +1324,30 @@ component HistoryDetail {
                 height: 40px;
                 text-wrap: word-wrap;
                 vertical-text-alignment: top;
-                description: "Saved request model and settings";
+                description: @tr("Saved request model and settings");
             }
             SelectableText {
-                text: "Session  " + root.selected-session
-                    + "    ·    Request ID  " + root.selected-request-id;
+                text: @tr(
+                    "Session  {}    ·    Request ID  {}",
+                    root.selected-session,
+                    root.selected-request-id
+                );
                 opacity: 0.68;
-                description: "Saved request session and request ID";
+                description: @tr("Saved request session and request ID");
             }
             SelectableText {
                 text: root.selected-path;
                 opacity: 0.68;
-                description: "Saved image file path";
+                description: @tr("Saved image file path");
             }
             HorizontalLayout {
                 spacing: 8px;
                 Button {
-                    text: "Load in Create";
+                    text: @tr("Load in Create");
                     clicked => { root.use-selected(); }
                 }
                 Button {
-                    text: "Open folder";
+                    text: @tr("Open folder");
                     enabled: root.selected-file-available;
                     clicked => { root.open-selected-folder(); }
                 }
@@ -1335,18 +1400,18 @@ component HistoryPage {
 
             HorizontalLayout {
                 SectionTitle {
-                    text: "Generation history";
+                    text: @tr("Generation history");
                     horizontal-stretch: 1;
                 }
                 Button {
-                    text: "Clear history";
+                    text: @tr("Clear history");
                     enabled: root.sessions.length > 0;
                     clicked => { root.clear-history(); }
                 }
             }
 
             Text {
-                text: "Search prompts, models, paths, request IDs, timestamps, or sessions.";
+                text: @tr("Search prompts, models, paths, request IDs, timestamps, or sessions.");
                 color: Palette.foreground;
                 opacity: 0.72;
             }
@@ -1354,7 +1419,8 @@ component HistoryPage {
                 height: 40px;
                 vertical-stretch: 0;
                 text <=> root.search-text;
-                placeholder-text: "Search generation history";
+                placeholder-text: @tr("Search generation history");
+                accessible-label: @tr("Search generation history");
                 edited(value) => { root.search-changed(value); }
             }
 
@@ -1442,15 +1508,15 @@ component ErrorEntryList {
             padding: 8px;
             spacing: 7px;
             Text {
-                text: "Entries";
+                text: @tr("Entries");
                 color: Palette.foreground;
                 font-weight: 650;
             }
             ListView {
                 for entry in root.entries: Rectangle {
                     height: 90px;
-                    border-width: entry.selected ? 2px : 1px;
-                    border-color: entry.selected
+                    border-width: entry.selected || entry-focus.has-focus ? 2px : 1px;
+                    border-color: entry.selected || entry-focus.has-focus
                         ? Palette.accent-background
                         : Palette.border;
                     border-radius: 7px;
@@ -1483,7 +1549,27 @@ component ErrorEntryList {
                     }
                     entry-touch := TouchArea {
                         mouse-cursor: pointer;
-                        clicked => { root.select-entry(entry.id); }
+                        clicked => {
+                            entry-focus.focus();
+                            root.select-entry(entry.id);
+                        }
+                    }
+                    entry-focus := FocusScope {
+                        x: 0;
+                        width: 0;
+                        accessible-role: button;
+                        accessible-label: @tr(
+                            "Select error {} {}",
+                            entry.timestamp,
+                            entry.category
+                        );
+                        key-pressed(event) => {
+                            if event.text == " " || event.text == "\n" {
+                                root.select-entry(entry.id);
+                                return accept;
+                            }
+                            return reject;
+                        }
                     }
                 }
             }
@@ -1514,7 +1600,7 @@ component ErrorDetail {
         if !root.has-selection: VerticalLayout {
             alignment: center;
             Text {
-                text: "Choose an error to inspect its bound request and provider response.";
+                text: @tr("Choose an error to inspect its bound request and provider response.");
                 color: Palette.foreground;
                 opacity: 0.66;
                 horizontal-alignment: center;
@@ -1529,28 +1615,34 @@ component ErrorDetail {
                 font-weight: 650;
             }
             SelectableText {
-                text: "Session  " + root.selected-session
-                    + "    ·    Operation  " + root.selected-operation;
+                text: @tr(
+                    "Session  {}    ·    Operation  {}",
+                    root.selected-session,
+                    root.selected-operation
+                );
                 opacity: 0.72;
-                description: "Error session and operation";
+                description: @tr("Error session and operation");
             }
             SelectableText {
-                text: "Model  " + root.selected-model
-                    + "    ·    Request ID  " + root.selected-request-id;
+                text: @tr(
+                    "Model  {}    ·    Request ID  {}",
+                    root.selected-model,
+                    root.selected-request-id
+                );
                 opacity: 0.72;
-                description: "Error model and request ID";
+                description: @tr("Error model and request ID");
             }
             SelectableText {
-                text: "Endpoint  " + root.selected-endpoint;
+                text: @tr("Endpoint  {}", root.selected-endpoint);
                 opacity: 0.72;
-                description: "Error endpoint";
+                description: @tr("Error endpoint");
             }
             SelectableText {
-                text: "Prompt  " + root.selected-prompt;
+                text: @tr("Prompt  {}", root.selected-prompt);
                 height: 52px;
                 text-wrap: word-wrap;
                 vertical-text-alignment: top;
-                description: "Error request prompt";
+                description: @tr("Error request prompt");
             }
             Rectangle {
                 height: 76px;
@@ -1566,24 +1658,24 @@ component ErrorDetail {
                     text: root.selected-summary;
                     text-wrap: word-wrap;
                     vertical-text-alignment: top;
-                    description: "Error text";
+                    description: @tr("Error text");
                 }
             }
             Text {
                 text: root.selected-response-truncated
-                    ? "Provider response (truncated at the 1 MiB safety limit)"
-                    : "Full provider response";
+                    ? @tr("Provider response (truncated at the 1 MiB safety limit)")
+                    : @tr("Full provider response");
                 color: Palette.foreground;
                 font-weight: 650;
             }
             TextEdit {
                 text: root.selected-full-response == ""
-                    ? "No HTTP response body was available for this error."
+                    ? @tr("No HTTP response body was available for this error.")
                     : root.selected-full-response;
                 read-only: true;
                 wrap: word-wrap;
                 vertical-stretch: 1;
-                accessible-label: "Selectable full provider response";
+                accessible-label: @tr("Selectable full provider response");
             }
         }
     }
@@ -1609,6 +1701,7 @@ component ErrorLogPage {
     callback search-changed(string);
     callback select-entry(string);
     callback clear-errors();
+    callback export-diagnostics();
 
     height: root.compact ? 1080px : 720px;
     min-width: 460px;
@@ -1629,17 +1722,21 @@ component ErrorLogPage {
 
             HorizontalLayout {
                 SectionTitle {
-                    text: "Error log";
+                    text: @tr("Error log");
                     horizontal-stretch: 1;
                 }
                 Button {
-                    text: "Clear error log";
+                    text: @tr("Export diagnostics");
+                    clicked => { root.export-diagnostics(); }
+                }
+                Button {
+                    text: @tr("Clear error log");
                     enabled: root.entries.length > 0;
                     clicked => { root.clear-errors(); }
                 }
             }
             Text {
-                text: "Provider bodies are preserved up to the safety limit after API-key redaction. Image payloads are never logged.";
+                text: @tr("Provider bodies are preserved up to the safety limit after API-key redaction. Image payloads are never logged.");
                 color: Palette.foreground;
                 opacity: 0.72;
                 wrap: word-wrap;
@@ -1648,7 +1745,8 @@ component ErrorLogPage {
                 height: 40px;
                 vertical-stretch: 0;
                 text <=> root.search-text;
-                placeholder-text: "Search errors, prompts, sessions, request IDs, or response bodies";
+                placeholder-text: @tr("Search errors, prompts, sessions, request IDs, or response bodies");
+                accessible-label: @tr("Search error log");
                 edited(value) => { root.search-changed(value); }
             }
 
@@ -1748,9 +1846,9 @@ component SettingsPage {
             padding: 18px;
             spacing: 13px;
 
-            SectionTitle { text: "Settings"; }
+            SectionTitle { text: @tr("Settings"); }
             Text {
-                text: "Settings and SQLite history live under ~/.config/a6-studio. The API key remains in Secret Service.";
+                text: @tr("Settings and SQLite history live under ~/.config/a6-studio. The API key remains in Secret Service.");
                 color: Palette.foreground;
                 opacity: 0.72;
                 wrap: word-wrap;
@@ -1760,20 +1858,22 @@ component SettingsPage {
                 spacing: 14px;
                 VerticalLayout {
                     spacing: 5px;
-                    Text { text: "Base URL"; color: Palette.foreground; font-weight: 600; }
+                    Text { text: @tr("Base URL"); color: Palette.foreground; font-weight: 600; }
                     LineEdit {
                         text <=> root.base-url;
                         enabled: !root.busy;
                         placeholder-text: "https://api.a6api.com";
+                        accessible-label: @tr("Base URL");
                     }
                 }
                 VerticalLayout {
                     spacing: 5px;
-                    Text { text: "Model ID"; color: Palette.foreground; font-weight: 600; }
+                    Text { text: @tr("Model ID"); color: Palette.foreground; font-weight: 600; }
                     LineEdit {
                         text <=> root.model-id;
                         enabled: !root.busy;
                         placeholder-text: "gpt-image-2";
+                        accessible-label: @tr("Model ID");
                     }
                 }
             }
@@ -1782,20 +1882,22 @@ component SettingsPage {
                 spacing: 10px;
                 VerticalLayout {
                     spacing: 5px;
-                    Text { text: "Base URL"; color: Palette.foreground; font-weight: 600; }
+                    Text { text: @tr("Base URL"); color: Palette.foreground; font-weight: 600; }
                     LineEdit {
                         text <=> root.base-url;
                         enabled: !root.busy;
                         placeholder-text: "https://api.a6api.com";
+                        accessible-label: @tr("Base URL");
                     }
                 }
                 VerticalLayout {
                     spacing: 5px;
-                    Text { text: "Model ID"; color: Palette.foreground; font-weight: 600; }
+                    Text { text: @tr("Model ID"); color: Palette.foreground; font-weight: 600; }
                     LineEdit {
                         text <=> root.model-id;
                         enabled: !root.busy;
                         placeholder-text: "gpt-image-2";
+                        accessible-label: @tr("Model ID");
                     }
                 }
             }
@@ -1803,7 +1905,7 @@ component SettingsPage {
             if !root.compact: HorizontalLayout {
                 spacing: 14px;
                 LabeledChoice {
-                    label: "Default dimensions";
+                    label: @tr("Default dimensions");
                     choices: [
                         "auto", "1024x1024", "1536x1024", "1024x1536",
                         "2048x2048", "2048x1152", "1152x2048",
@@ -1813,13 +1915,13 @@ component SettingsPage {
                     enabled: !root.busy;
                 }
                 LabeledChoice {
-                    label: "Default quality";
+                    label: @tr("Default quality");
                     choices: ["auto", "low", "medium", "high"];
                     value <=> root.default-quality;
                     enabled: !root.busy;
                 }
                 LabeledChoice {
-                    label: "Default format";
+                    label: @tr("Default format");
                     choices: ["PNG", "WebP", "JPEG"];
                     value <=> root.default-format;
                     enabled: !root.busy;
@@ -1829,7 +1931,7 @@ component SettingsPage {
             if root.compact: VerticalLayout {
                 spacing: 9px;
                 LabeledChoice {
-                    label: "Default dimensions";
+                    label: @tr("Default dimensions");
                     choices: [
                         "auto", "1024x1024", "1536x1024", "1024x1536",
                         "2048x2048", "2048x1152", "1152x2048",
@@ -1839,13 +1941,13 @@ component SettingsPage {
                     enabled: !root.busy;
                 }
                 LabeledChoice {
-                    label: "Default quality";
+                    label: @tr("Default quality");
                     choices: ["auto", "low", "medium", "high"];
                     value <=> root.default-quality;
                     enabled: !root.busy;
                 }
                 LabeledChoice {
-                    label: "Default format";
+                    label: @tr("Default format");
                     choices: ["PNG", "WebP", "JPEG"];
                     value <=> root.default-format;
                     enabled: !root.busy;
@@ -1855,7 +1957,7 @@ component SettingsPage {
             VerticalLayout {
                 spacing: 5px;
                 Text {
-                    text: "Default output directory";
+                    text: @tr("Default output directory");
                     color: Palette.foreground;
                     font-weight: 600;
                 }
@@ -1865,9 +1967,10 @@ component SettingsPage {
                         text <=> root.output-directory;
                         enabled: !root.busy;
                         placeholder-text: "/absolute/path/to/outputs";
+                        accessible-label: @tr("Default output directory");
                     }
                     Button {
-                        text: "Choose…";
+                        text: @tr("Choose…");
                         enabled: !root.busy;
                         clicked => { root.choose-output-directory(); }
                     }
@@ -1880,7 +1983,7 @@ component SettingsPage {
                     width: 260px;
                     spacing: 5px;
                     Text {
-                        text: "Request timeout (seconds)";
+                        text: @tr("Request timeout (seconds)");
                         color: Palette.foreground;
                         font-weight: 600;
                     }
@@ -1889,10 +1992,11 @@ component SettingsPage {
                         minimum: 10;
                         maximum: 1800;
                         enabled: !root.busy;
+                        accessible-label: @tr("Request timeout in seconds");
                     }
                 }
                 CheckBox {
-                    text: "Retain local generation history";
+                    text: @tr("Retain local generation history");
                     checked <=> root.retain-history;
                     enabled: !root.busy;
                 }
@@ -1910,13 +2014,18 @@ component SettingsPage {
                     padding: 12px;
                     spacing: 9px;
                     Text {
-                        text: "Secure API key";
+                        text: @tr("Secure API key");
                         color: Palette.foreground;
                         font-weight: 650;
                     }
                     Text {
-                        text: "Active source: " + root.api-key-source
-                            + (root.api-key-mask == "" ? "" : "  ·  " + root.api-key-mask);
+                        text: root.api-key-mask == ""
+                            ? @tr("Active source: {}", root.api-key-source)
+                            : @tr(
+                                "Active source: {}  ·  {}",
+                                root.api-key-source,
+                                root.api-key-mask
+                            );
                         color: Palette.foreground;
                         opacity: 0.78;
                     }
@@ -1924,17 +2033,18 @@ component SettingsPage {
                         text <=> root.api-key-entry;
                         input-type: password;
                         enabled: !root.busy;
-                        placeholder-text: "Enter a key to store in Secret Service / KWallet";
+                        placeholder-text: @tr("Enter a key to store in Secret Service / KWallet");
+                        accessible-label: @tr("API key to store securely");
                     }
                     HorizontalLayout {
                         spacing: 8px;
                         Button {
-                            text: "Store in system keyring";
+                            text: @tr("Store in system keyring");
                             enabled: !root.busy && root.api-key-entry != "";
                             clicked => { root.store-api-key(); }
                         }
                         Button {
-                            text: "Forget stored key";
+                            text: @tr("Forget stored key");
                             enabled: !root.busy;
                             clicked => { root.forget-api-key(); }
                         }
@@ -1952,7 +2062,7 @@ component SettingsPage {
 
             HorizontalLayout {
                 Button {
-                    text: "Save and apply settings";
+                    text: @tr("Save and apply settings");
                     enabled: !root.busy;
                     clicked => { root.save-settings(); }
                 }
@@ -1983,12 +2093,13 @@ component SettingsPage {
 
 export component AppWindow inherits Window {
     title: "A6 Image Studio";
-    icon: @image-url("../assets/icons/hicolor/scalable/apps/org.a6studio.A6ImageStudio.svg");
+    icon: @image-url("../assets/icons/hicolor/scalable/apps/io.github.grandfathertech.A6ImageStudio.svg");
     preferred-width: 1180px;
     preferred-height: 820px;
     min-width: 500px;
     min-height: 400px;
     background: Palette.background.transparentize(0.18);
+    forward-focus: shortcut-scope;
 
     property <bool> compact-layout: root.width < 900px;
     private property <length> generation-panel-height: 540px
@@ -2006,7 +2117,7 @@ export component AppWindow inherits Window {
         + (root.details-expanded && root.has-result ? 252px : 0px);
     in-out property <string> navigation-value: "A6 Image Studio · Create";
 
-    in-out property <string> prompt: "A single solid blue circle centered on a plain white background";
+    in-out property <string> prompt: @tr("A single solid blue circle centered on a plain white background");
     in-out property <string> size-value: "1024x1024";
     in-out property <string> quality-value: "low";
     in-out property <string> background-value: "auto";
@@ -2111,23 +2222,69 @@ export component AppWindow inherits Window {
     callback error-search-changed(string);
     callback error-select-entry(string);
     callback clear-errors();
+    callback export-diagnostics();
     callback save-settings();
     callback choose-output-directory();
     callback store-api-key();
     callback forget-api-key();
 
-    scroll := ScrollView {
-        viewport-width: self.visible-width;
-        viewport-height: max(self.visible-height, content.min-height);
+    shortcut-scope := FocusScope {
+        KeyBinding {
+            keys: @keys(Control + Return);
+            enabled: root.navigation-value == "A6 Image Studio · Create"
+                && root.configured && !root.busy;
+            activated => { root.generate-image(); }
+        }
+        KeyBinding {
+            keys: @keys(Escape);
+            enabled: root.busy;
+            activated => { root.cancel-operation(); }
+        }
+        KeyBinding {
+            keys: @keys(Control + "1");
+            activated => {
+                root.navigation-value = "A6 Image Studio · Create";
+                root.navigation-changed(root.navigation-value);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Control + "2");
+            activated => {
+                root.navigation-value = "A6 Image Studio · History";
+                root.navigation-changed(root.navigation-value);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Control + "3");
+            activated => {
+                root.navigation-value = "A6 Image Studio · Error log";
+                root.navigation-changed(root.navigation-value);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Control + "4");
+            activated => {
+                root.navigation-value = "A6 Image Studio · Settings";
+                root.navigation-changed(root.navigation-value);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Control + Shift + E);
+            activated => { root.export-diagnostics(); }
+        }
 
-        content := VerticalLayout {
-            width: scroll.visible-width;
-            height: self.min-height;
-            padding-left: 16px;
-            padding-right: 24px;
-            padding-top: 14px;
-            padding-bottom: 18px;
-            spacing: 14px;
+        scroll := ScrollView {
+            viewport-width: self.visible-width;
+            viewport-height: max(self.visible-height, content.min-height);
+
+            content := VerticalLayout {
+                width: scroll.visible-width;
+                height: self.min-height;
+                padding-left: 16px;
+                padding-right: 24px;
+                padding-top: 14px;
+                padding-bottom: 18px;
+                spacing: 14px;
 
             CompactHeader {
                 compact: root.compact-layout;
@@ -2265,6 +2422,7 @@ export component AppWindow inherits Window {
             if root.navigation-value == "A6 Image Studio · History": MotionSurface {
                 content-height: root.compact-layout ? 1330px : 720px;
                 HistoryPage {
+                    width: parent.width;
                     horizontal-stretch: 1;
                     compact: root.compact-layout;
                     sessions: root.history-sessions;
@@ -2294,6 +2452,7 @@ export component AppWindow inherits Window {
             if root.navigation-value == "A6 Image Studio · Error log": MotionSurface {
                 content-height: root.compact-layout ? 1080px : 720px;
                 ErrorLogPage {
+                    width: parent.width;
                     horizontal-stretch: 1;
                     compact: root.compact-layout;
                     entries: root.error-log-items;
@@ -2314,12 +2473,14 @@ export component AppWindow inherits Window {
                     search-changed(value) => { root.error-search-changed(value); }
                     select-entry(id) => { root.error-select-entry(id); }
                     clear-errors => { root.clear-errors(); }
+                    export-diagnostics => { root.export-diagnostics(); }
                 }
             }
 
             if root.navigation-value == "A6 Image Studio · Settings": MotionSurface {
                 content-height: root.compact-layout ? 1040px : 720px;
                 SettingsPage {
+                    width: parent.width;
                     horizontal-stretch: 1;
                     compact: root.compact-layout;
                     base-url <=> root.settings-base-url;
@@ -2341,6 +2502,7 @@ export component AppWindow inherits Window {
                     store-api-key => { root.store-api-key(); }
                     forget-api-key => { root.forget-api-key(); }
                 }
+            }
             }
         }
     }

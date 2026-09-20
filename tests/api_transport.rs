@@ -12,7 +12,7 @@ use base64::engine::general_purpose::STANDARD;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 const MAX_TEST_REQUEST_BYTES: usize = 1024 * 1024;
 
@@ -385,11 +385,15 @@ async fn preserves_structured_api_errors() {
 
 #[tokio::test]
 async fn preserves_non_json_api_error_body_and_redacts_key() {
-    let response = MockResponse::text(
-        502,
-        "upstream rejected test-secret-key while processing the request",
-    );
-    let (base_url, server) = start_mock_server(vec![response])
+    let responses = (0..3)
+        .map(|_| {
+            MockResponse::text(
+                502,
+                "upstream rejected test-secret-key while processing the request",
+            )
+        })
+        .collect();
+    let (base_url, server) = start_mock_server(responses)
         .await
         .expect("mock server should start");
 
@@ -398,7 +402,7 @@ async fn preserves_non_json_api_error_body_and_redacts_key() {
         .check_models()
         .await
         .expect_err("request should fail");
-    let _requests = finish_server(server).await;
+    let requests = finish_server(server).await;
 
     match error {
         ApiError::Http {
@@ -412,6 +416,56 @@ async fn preserves_non_json_api_error_body_and_redacts_key() {
         }
         other => panic!("unexpected error: {other}"),
     }
+    assert_eq!(requests.len(), 3, "5xx retries must stop at three attempts");
+}
+
+#[tokio::test]
+async fn retries_rate_limiting_and_then_returns_the_successful_response() {
+    let responses = vec![
+        MockResponse::json(429, serde_json::json!({"error": {"message": "try again"}}))
+            .with_header("retry-after", "0"),
+        MockResponse::json(200, serde_json::json!({"data": [{"id": "gpt-image-2"}]})),
+    ];
+    let (base_url, server) = start_mock_server(responses)
+        .await
+        .expect("mock server should start");
+
+    let client = ApiClient::new(test_config(&base_url)).expect("client should build");
+    let result = client
+        .check_models()
+        .await
+        .expect("second attempt should succeed");
+    let requests = finish_server(server).await;
+
+    assert!(result.model_present);
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| request.path == "/v1/models"));
+}
+
+#[tokio::test]
+async fn retry_backoff_can_be_cancelled_before_another_request_is_sent() {
+    let response = MockResponse::json(
+        429,
+        serde_json::json!({"error": {"message": "wait before retrying"}}),
+    )
+    .with_header("retry-after", "2");
+    let (base_url, server) = start_mock_server(vec![response])
+        .await
+        .expect("mock server should start");
+    let client = ApiClient::new(test_config(&base_url)).expect("client should build");
+
+    let worker = tokio::spawn(async move { client.check_models().await });
+    sleep(Duration::from_millis(500)).await;
+    worker.abort();
+    assert!(
+        worker
+            .await
+            .expect_err("aborted retry worker should not complete")
+            .is_cancelled()
+    );
+    let requests = finish_server(server).await;
+
+    assert_eq!(requests.len(), 1);
 }
 
 #[tokio::test]

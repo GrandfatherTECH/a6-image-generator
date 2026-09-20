@@ -5,12 +5,17 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-pub const APP_ID: &str = "org.a6studio.A6ImageStudio";
+/// Stable desktop, launcher, AppStream, and icon identity.
+pub const APP_ID: &str = "io.github.grandfathertech.A6ImageStudio";
+/// Directory used for application-managed settings, data, and cache.
 pub const APP_DIRECTORY: &str = "a6-studio";
-pub const LEGACY_APP_ID: &str = "io.github.grandfathertech.a6-image-studio";
 const LEGACY_APP_DIRECTORY: &str = "a6-image-studio";
 const DATABASE_FILENAME: &str = "a6-studio.sqlite3";
 
+/// Resolved current and legacy application paths.
+///
+/// Current application-managed state is intentionally consolidated below
+/// `$HOME/.config/a6-studio`; legacy XDG roots are retained only for migration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppPaths {
     app_dir: PathBuf,
@@ -63,6 +68,8 @@ impl AppPaths {
         &self.legacy_cache_dir
     }
 
+    /// Resolve absolute current paths and retain XDG-derived legacy roots for
+    /// migration. Relative environment values are ignored.
     fn from_environment(
         home: Option<OsString>,
         config_home: Option<OsString>,
@@ -90,6 +97,7 @@ impl AppPaths {
     }
 }
 
+/// Failure to derive required absolute application paths.
 #[derive(Debug, Error)]
 pub enum XdgPathError {
     #[error("an absolute HOME or XDG directory could not be determined")]

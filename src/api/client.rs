@@ -1,9 +1,15 @@
-use std::time::Duration;
+//! Bounded, retrying HTTP transport for model checks and image generation.
+//!
+//! Requests use the validated [`Config`] timeout and retry temporary transport,
+//! rate-limit, and server failures at most three times. Error bodies are
+//! bounded and sanitized before they leave this module.
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use reqwest::header::HeaderMap;
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use url::Url;
 
 use crate::config::Config;
@@ -19,7 +25,14 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESPONSE_BYTES: usize = 80 * 1024 * 1024;
 const MAX_ERROR_BODY_BYTES: usize = 1024 * 1024;
 const MAX_ERROR_SUMMARY_CHARS: usize = 4_096;
+const MAX_REQUEST_ATTEMPTS: u32 = 3;
+const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
+const RETRY_MAX_EXPONENTIAL_DELAY: Duration = Duration::from_secs(8);
 
+/// Authenticated client for model discovery and image generation.
+///
+/// The client accepts both Base64 and URL image responses. URL downloads are
+/// restricted to HTTP(S) and intentionally do not receive the gateway token.
 #[derive(Clone, Debug)]
 pub struct ApiClient {
     config: Config,
@@ -40,18 +53,14 @@ impl ApiClient {
     pub async fn check_models(&self) -> Result<ModelsCheck, ApiError> {
         let endpoint = endpoint_url(self.config.base_url(), "models")?;
         let response = self
-            .http
-            .get(endpoint)
-            .bearer_auth(self.config.api_key().expose())
-            .send()
-            .await
-            .map_err(classify_transport)?;
+            .send_with_retry("model-list request", true, || {
+                self.http
+                    .get(endpoint.clone())
+                    .bearer_auth(self.config.api_key().expose())
+            })
+            .await?;
         let status = response.status();
         let metadata = response_metadata(response.headers());
-
-        if !status.is_success() {
-            return Err(self.http_error(response, true).await);
-        }
 
         let body = read_limited_body(response).await?;
         let models: ModelsResponse =
@@ -79,16 +88,13 @@ impl ApiClient {
     ) -> Result<ImageGenerationOutput, ApiError> {
         let endpoint = endpoint_url(self.config.base_url(), "images/generations")?;
         let response = self
-            .http
-            .post(endpoint)
-            .bearer_auth(self.config.api_key().expose())
-            .json(request)
-            .send()
-            .await
-            .map_err(classify_transport)?;
-        if !response.status().is_success() {
-            return Err(self.http_error(response, false).await);
-        }
+            .send_with_retry("image-generation request", false, || {
+                self.http
+                    .post(endpoint.clone())
+                    .bearer_auth(self.config.api_key().expose())
+                    .json(request)
+            })
+            .await?;
 
         let metadata = response_metadata(response.headers());
         let body = read_limited_body(response).await?;
@@ -108,15 +114,43 @@ impl ApiClient {
 
         // The gateway bearer token is intentionally not sent to third-party image URLs.
         let response = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .map_err(classify_transport)?;
-        if !response.status().is_success() {
-            return Err(self.http_error(response, false).await);
-        }
+            .send_with_retry("generated-image download", false, || {
+                self.http.get(url.clone())
+            })
+            .await?;
         read_limited_body(response).await
+    }
+
+    async fn send_with_retry(
+        &self,
+        operation: &'static str,
+        model_list: bool,
+        mut build_request: impl FnMut() -> RequestBuilder,
+    ) -> Result<Response, ApiError> {
+        let mut attempt = 1;
+        loop {
+            let error = match build_request().send().await {
+                Ok(response) if response.status().is_success() => return Ok(response),
+                Ok(response) => self.http_error(response, model_list).await,
+                Err(error) => classify_transport(error),
+            };
+
+            if attempt >= MAX_REQUEST_ATTEMPTS || !error.is_retryable() {
+                return Err(error);
+            }
+
+            let delay = retry_delay(error.retry_after(), attempt);
+            tracing::warn!(
+                operation,
+                attempt,
+                max_attempts = MAX_REQUEST_ATTEMPTS,
+                delay_ms = delay.as_millis(),
+                category = error.category(),
+                "temporary request failure; retrying"
+            );
+            tokio::time::sleep(delay).await;
+            attempt += 1;
+        }
     }
 
     async fn http_error(&self, response: Response, model_list: bool) -> ApiError {
@@ -162,12 +196,54 @@ impl ApiClient {
     }
 }
 
+/// Compute cancellable exponential backoff with jitter and server minimums.
+fn retry_delay(retry_after: Option<&str>, failed_attempt: u32) -> Duration {
+    let multiplier = 1_u32 << failed_attempt.saturating_sub(1).min(4);
+    let exponential = RETRY_BASE_DELAY
+        .saturating_mul(multiplier)
+        .min(RETRY_MAX_EXPONENTIAL_DELAY);
+    let jittered = jitter(exponential, failed_attempt);
+    retry_after
+        .and_then(parse_retry_after)
+        .map_or(jittered, |server_delay| server_delay.max(jittered))
+}
+
+fn parse_retry_after(value: &str) -> Option<Duration> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let retry_at = httpdate::parse_http_date(value).ok()?;
+    Some(
+        retry_at
+            .duration_since(SystemTime::now())
+            .unwrap_or_default(),
+    )
+}
+
+fn jitter(delay: Duration, attempt: u32) -> Duration {
+    let millis = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+    let span = millis / 5;
+    if span == 0 {
+        return delay;
+    }
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| u64::from(elapsed.subsec_nanos()))
+        ^ u64::from(std::process::id())
+        ^ u64::from(attempt).wrapping_mul(0x9E37_79B9);
+    let offset = seed % (span.saturating_mul(2).saturating_add(1));
+    Duration::from_millis(millis.saturating_sub(span).saturating_add(offset))
+}
+
 #[derive(Debug)]
 enum ImageSource {
     Bytes(Vec<u8>),
     Url(Url),
 }
 
+/// Decode the first Base64 image, falling back to the first URL only when no
+/// Base64 payload is present.
 fn parse_image_response(body: &[u8], api_key: &str) -> Result<ImageSource, ApiError> {
     let response: ImageGenerationResponse =
         serde_json::from_slice(body).map_err(|error| ApiError::InvalidJson {
@@ -346,6 +422,23 @@ mod tests {
                 .as_str(),
             "https://api.example.com/v1/models"
         );
+    }
+
+    #[test]
+    fn parses_both_retry_after_forms() {
+        assert_eq!(parse_retry_after("7"), Some(Duration::from_secs(7)));
+        let future = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(30));
+        let parsed = parse_retry_after(&future).expect("HTTP date should parse");
+        assert!(parsed <= Duration::from_secs(30));
+        assert!(parsed >= Duration::from_secs(28));
+    }
+
+    #[test]
+    fn retry_delay_is_bounded_and_never_earlier_than_retry_after() {
+        let delay = retry_delay(Some("5"), 1);
+        assert!(delay >= Duration::from_secs(5));
+        let exponential = retry_delay(None, 10);
+        assert!(exponential <= Duration::from_millis(9_600));
     }
 
     #[test]

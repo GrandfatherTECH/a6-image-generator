@@ -15,9 +15,13 @@ use crate::config::{Config, ConfigError, DEFAULT_BASE_URL, DEFAULT_IMAGE_MODEL};
 use crate::generation::{ImageQuality, ImageSize, OutputFormat};
 use crate::xdg::{AppPaths, XdgPathError};
 
+/// Default desktop request timeout stored in preferences.
 pub const DEFAULT_REQUEST_TIMEOUT_SECONDS: u64 = 300;
 const SETTINGS_FILENAME: &str = "settings.json";
 
+/// Non-secret desktop settings persisted as JSON.
+///
+/// API credentials are deliberately absent from this schema.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppPreferences {
@@ -85,6 +89,7 @@ impl Default for AppPreferences {
     }
 }
 
+/// Atomic JSON preference store with one-time legacy path migration.
 #[derive(Clone, Debug)]
 pub struct PreferencesStore {
     path: PathBuf,
@@ -114,6 +119,8 @@ impl PreferencesStore {
         &self.path
     }
 
+    /// Load and validate preferences, importing the legacy file only when the
+    /// current path does not exist. The legacy source remains untouched.
     pub fn load(&self, defaults: &AppPreferences) -> Result<AppPreferences, PreferencesError> {
         let (bytes, migrated_from_legacy) = match fs::read(&self.path) {
             Ok(bytes) => (bytes, false),
@@ -181,6 +188,7 @@ impl PreferencesStore {
     }
 }
 
+/// Preference discovery, validation, serialization, or file failure.
 #[derive(Debug, Error)]
 pub enum PreferencesError {
     #[error(transparent)]

@@ -1,3 +1,9 @@
+//! Slint event-loop orchestration and asynchronous desktop workers.
+//!
+//! UI callbacks perform validation and state transitions only; network,
+//! keyring, decoding, and filesystem work is dispatched away from the event
+//! loop and returned through weak component handles.
+
 use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
@@ -17,6 +23,7 @@ use super::state::{
 };
 use crate::api::{ApiClient, ApiError, ImageGenerationRequest, ModelsCheck, ResponseMetadata};
 use crate::config::{Config, DEFAULT_IMAGE_MODEL};
+use crate::diagnostics;
 use crate::domain::{GeneratedImage, PersistedImage};
 use crate::generation::{
     CompatibilitySettings, GenerationInput, GenerationOptions, GenerationValidationError,
@@ -50,6 +57,7 @@ const SIZE_PRESETS: &[&str] = &[
     "2160x3840",
 ];
 
+/// Desktop bootstrap, runtime, or Slint platform failure.
 #[derive(Debug, Error)]
 pub enum GuiError {
     #[error("failed to create the asynchronous worker runtime: {0}")]
@@ -158,13 +166,23 @@ impl OperationControl {
         self.lock().state.state().clone()
     }
 
-    fn begin(&self, kind: OperationKind) -> (OperationId, ApplicationState) {
+    fn try_begin(&self, kind: OperationKind) -> Option<(OperationId, ApplicationState)> {
         let mut coordinator = self.lock();
-        if let Some(active) = coordinator.active.take() {
-            active.abort.abort();
+        if matches!(
+            coordinator.state.state(),
+            ApplicationState::Connecting { .. } | ApplicationState::Generating { .. }
+        ) {
+            return None;
         }
         let operation = coordinator.state.begin(kind);
-        (operation, coordinator.state.state().clone())
+        Some((operation, coordinator.state.state().clone()))
+    }
+
+    fn is_busy(&self) -> bool {
+        matches!(
+            self.lock().state.state(),
+            ApplicationState::Connecting { .. } | ApplicationState::Generating { .. }
+        )
     }
 
     fn attach(&self, operation: OperationId, abort: AbortHandle) {
@@ -195,6 +213,14 @@ impl OperationControl {
             active.abort.abort();
         }
         Some(coordinator.state.state().clone())
+    }
+
+    fn shutdown(&self) {
+        let mut coordinator = self.lock();
+        let _ = coordinator.state.cancel();
+        if let Some(active) = coordinator.active.take() {
+            active.abort.abort();
+        }
     }
 
     fn reject(&self, message: String) -> ApplicationState {
@@ -393,6 +419,13 @@ pub fn run() -> Result<(), GuiError> {
         present_state(&ui, &operations.state());
         present_history_browser(&ui, &services);
         present_error_browser(&ui, &services);
+        ui.window().on_close_requested({
+            let operations = operations.clone();
+            move || {
+                operations.shutdown();
+                slint::CloseRequestResponse::HideWindow
+            }
+        });
         bind_callbacks(&ui, runtime_handle, services, operations, results);
         ui.run()?;
         Ok(())
@@ -676,7 +709,12 @@ fn bind_connection_callback(
             let Ok(backend) = services.backend.current() else {
                 return;
             };
-            let (operation, state) = operations.begin(OperationKind::Connecting);
+            let Some((operation, state)) = operations.try_begin(OperationKind::Connecting) else {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_action_status("A request is already in progress".into());
+                }
+                return;
+            };
             present_weak_state(&ui_weak, &state);
 
             let worker_operations = operations.clone();
@@ -730,6 +768,10 @@ fn bind_generation_callbacks(
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
+            if operations.is_busy() {
+                ui.set_action_status("A request is already in progress".into());
+                return;
+            }
             let input = match generation_input_from_ui(&ui) {
                 Ok(input) => input,
                 Err(error) => {
@@ -789,7 +831,12 @@ fn start_generation(
     let Ok(backend) = services.backend.current() else {
         return;
     };
-    let (operation, state) = operations.begin(OperationKind::Generating);
+    let Some((operation, state)) = operations.try_begin(OperationKind::Generating) else {
+        if let Some(ui) = ui_weak.upgrade() {
+            ui.set_action_status("A request is already in progress".into());
+        }
+        return;
+    };
     present_weak_state(ui_weak, &state);
     if let Some(ui) = ui_weak.upgrade() {
         ui.set_action_status(SharedString::default());
@@ -1115,6 +1162,48 @@ fn bind_workspace_callbacks(ui: &AppWindow, runtime: &Handle, services: &Desktop
                         .set_error_log_status(format!("Could not clear error log: {error}").into()),
                     Err(error) => ui.set_error_log_status(
                         format!("Error-log cleanup worker failed: {error}").into(),
+                    ),
+                });
+            });
+        }
+    });
+
+    ui.on_export_diagnostics({
+        let ui_weak = ui.as_weak();
+        let runtime = runtime.clone();
+        let services = services.clone();
+        move || {
+            let api_key = lock_credential(&services)
+                .as_ref()
+                .map(|credential| credential.key.expose().to_owned());
+            let report = match diagnostics::export_report(
+                &services.session_id,
+                services.history.errors(),
+                api_key.as_deref(),
+            ) {
+                Ok(report) => report,
+                Err(error) => {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.set_error_log_status(
+                            format!("Could not prepare diagnostic report: {error}").into(),
+                        );
+                    }
+                    return;
+                }
+            };
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_error_log_status("Opening diagnostic export dialog…".into());
+            }
+            let worker_ui = ui_weak.clone();
+            runtime.spawn(async move {
+                let result = actions::export_diagnostics(report).await;
+                let _ = worker_ui.upgrade_in_event_loop(move |ui| match result {
+                    Ok(Some(path)) => ui.set_error_log_status(
+                        format!("Sanitized diagnostics saved to {}", path.display()).into(),
+                    ),
+                    Ok(None) => ui.set_error_log_status("Diagnostic export cancelled".into()),
+                    Err(error) => ui.set_error_log_status(
+                        format!("Could not export diagnostics: {error}").into(),
                     ),
                 });
             });
@@ -2480,7 +2569,9 @@ mod tests {
     #[tokio::test]
     async fn cancellation_aborts_the_attached_worker_task() {
         let operations = OperationControl::new(ApplicationState::Idle);
-        let (operation, _) = operations.begin(OperationKind::Generating);
+        let (operation, _) = operations
+            .try_begin(OperationKind::Generating)
+            .expect("idle controller should begin an operation");
         let task = tokio::spawn(future::pending::<()>());
         operations.attach(operation, task.abort_handle());
 
@@ -2491,5 +2582,25 @@ mod tests {
             .await
             .expect_err("cancelled worker task should not complete");
         assert!(join_error.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn duplicate_operation_is_rejected_without_replacing_the_active_worker() {
+        let operations = OperationControl::new(ApplicationState::Idle);
+        let (operation, _) = operations
+            .try_begin(OperationKind::Generating)
+            .expect("idle controller should begin an operation");
+        let task = tokio::spawn(future::pending::<()>());
+        operations.attach(operation, task.abort_handle());
+
+        assert!(operations.try_begin(OperationKind::Connecting).is_none());
+        assert!(!task.is_finished());
+
+        operations.shutdown();
+        assert!(
+            task.await
+                .expect_err("shutdown should abort the active worker")
+                .is_cancelled()
+        );
     }
 }

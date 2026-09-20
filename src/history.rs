@@ -49,6 +49,7 @@ const ERROR_SELECT: &str = "
      ORDER BY timestamp DESC, rowid DESC
 ";
 
+/// Serializable generation and compatibility settings stored with history.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredGenerationSettings {
     pub size: String,
@@ -105,6 +106,9 @@ impl StoredGenerationSettings {
     }
 }
 
+/// Metadata-only record for one accepted generated image.
+///
+/// The referenced image file is independent and may later be moved or deleted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub id: String,
@@ -145,6 +149,7 @@ impl HistoryEntry {
     }
 }
 
+/// Sanitized, bounded operational error record stored in SQLite.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorLogEntry {
     pub id: String,
@@ -212,6 +217,9 @@ struct RepositoryState {
     errors: Vec<ErrorLogEntry>,
 }
 
+/// Transactional SQLite repository for history and error metadata.
+///
+/// In-memory indexes are updated only after successful database commits.
 #[derive(Clone, Debug)]
 pub struct HistoryRepository {
     database_path: PathBuf,
@@ -369,6 +377,8 @@ impl HistoryRepository {
         sessions
     }
 
+    /// Open the database and transactionally import each legacy JSON source at
+    /// most once without deleting the recovery copy.
     fn open_with_legacy(
         database_path: PathBuf,
         legacy_history_path: Option<PathBuf>,
@@ -423,6 +433,7 @@ impl HistoryRepository {
     }
 }
 
+/// Search result grouping history entries by application session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistorySession {
     pub id: String,
@@ -430,6 +441,7 @@ pub struct HistorySession {
     pub count: usize,
 }
 
+/// Create a process-unique, timestamped identifier for one application run.
 pub fn new_session_id() -> Result<String, HistoryError> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -438,6 +450,7 @@ pub fn new_session_id() -> Result<String, HistoryError> {
     Ok(format!("session-{millis}-{}", std::process::id()))
 }
 
+/// Format an RFC3339 timestamp for the desktop while preserving invalid input.
 pub fn display_timestamp(timestamp: &str) -> String {
     OffsetDateTime::parse(timestamp, &Rfc3339)
         .ok()
@@ -451,6 +464,7 @@ pub fn display_timestamp(timestamp: &str) -> String {
         .unwrap_or_else(|| timestamp.to_owned())
 }
 
+/// Case-insensitive search across user-visible history metadata.
 pub fn history_matches(entry: &HistoryEntry, query: &str) -> bool {
     [
         entry.session_id.as_str(),
@@ -464,6 +478,7 @@ pub fn history_matches(entry: &HistoryEntry, query: &str) -> bool {
     .any(|value| value.to_lowercase().contains(query))
 }
 
+/// Case-insensitive search across sanitized error metadata and response text.
 pub fn error_matches(entry: &ErrorLogEntry, query: &str) -> bool {
     let query = query.trim().to_lowercase();
     query.is_empty()
@@ -947,6 +962,7 @@ fn entry_id(session_id: &str, timestamp: &str, path: &Path) -> String {
     )
 }
 
+/// Persistence, migration, schema-version, or record-validation failure.
 #[derive(Debug, Error)]
 pub enum HistoryError {
     #[error(transparent)]

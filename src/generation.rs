@@ -31,12 +31,21 @@ macro_rules! string_enum {
     };
 }
 
+/// Required alignment for each explicit image edge.
 pub const IMAGE_DIMENSION_STEP: u32 = 16;
+/// Largest accepted width or height in pixels.
 pub const IMAGE_MAX_EDGE: u32 = 3_840;
+/// Smallest accepted total pixel count for an explicit image size.
 pub const IMAGE_MIN_PIXELS: u64 = 655_360;
+/// Largest accepted total pixel count for an explicit image size.
 pub const IMAGE_MAX_PIXELS: u64 = 8_294_400;
+/// Pixel count above which the UI labels a request as experimental.
 pub const IMAGE_EXPERIMENTAL_PIXELS: u64 = 2_560 * 1_440;
 
+/// Validated explicit image dimensions accepted by the configured model.
+///
+/// Construction enforces edge limits, 16-pixel alignment, a maximum 3:1 aspect
+/// ratio, and total-pixel bounds before any request reaches the network.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImageDimensions {
     width: u32,
@@ -105,6 +114,7 @@ impl fmt::Display for ImageDimensions {
     }
 }
 
+/// Either provider-selected dimensions or validated explicit dimensions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageSize {
     Auto,
@@ -166,6 +176,7 @@ impl FromStr for ImageSize {
     }
 }
 
+/// Provider quality requested for a generated image.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ImageQuality {
     Auto,
@@ -193,6 +204,7 @@ string_enum!(ImageQuality {
     High => "high",
 });
 
+/// Background treatment requested from the gateway.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ImageBackground {
     #[default]
@@ -217,6 +229,7 @@ string_enum!(ImageBackground {
     Transparent => "transparent",
 });
 
+/// Durable image format and its corresponding API representation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OutputFormat {
     #[default]
@@ -265,6 +278,9 @@ string_enum!(OutputFormat {
     Jpeg => "JPEG",
 });
 
+/// Controls which optional fields are present in the gateway request.
+///
+/// A disabled field is omitted entirely rather than serialized as `null`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CompatibilitySettings {
     pub send_size: bool,
@@ -284,6 +300,7 @@ impl Default for CompatibilitySettings {
     }
 }
 
+/// Validated generation controls shared by the desktop and transport layers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GenerationOptions {
     pub size: ImageSize,
@@ -305,6 +322,7 @@ impl GenerationOptions {
     }
 }
 
+/// A trimmed, non-empty prompt paired with validated generation options.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerationInput {
     prompt: String,
@@ -337,6 +355,7 @@ impl GenerationInput {
     }
 }
 
+/// Local validation failures that prevent a generation request.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum GenerationValidationError {
     #[error("enter a prompt before generating an image")]

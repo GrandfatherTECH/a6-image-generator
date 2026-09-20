@@ -3,12 +3,19 @@ name = "a6-image-studio"
 version = "0.1.0"
 edition = "2024"
 description = "A Linux client for image generation through A6API"
+repository = "https://github.com/grandfathertech/a6-image-generator"
+readme = "README.md"
+license-file = "LICENSE"
+keywords = ["image-generation", "linux", "slint", "a6api"]
+categories = ["command-line-utilities", "graphics", "multimedia::images"]
+publish = false
 build = "build.rs"
 
 [dependencies]
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+httpdate = "1.0"
 keyring = "=4.1.5"
 keyring-core = "=1.0.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -16,7 +23,7 @@ rfd = { version = "0.16", default-features = false, features = ["async-std", "wa
 rusqlite = { version = "=0.39.0", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-slint = { version = "=1.17.1", default-features = false, features = ["accessibility", "backend-qt", "backend-winit", "backend-winit-wayland", "backend-winit-x11", "compat-1-2", "renderer-femtovg", "renderer-software", "std", "unstable-winit-030"] }
+slint = { version = "=1.17.1", default-features = false, features = ["accessibility", "backend-qt", "backend-winit", "backend-winit-wayland", "backend-winit-x11", "compat-1-2", "gettext", "renderer-femtovg", "renderer-software", "std", "unstable-winit-030"] }
 thiserror = "2.0"
 time = { version = "=0.3.54", features = ["formatting", "macros", "parsing", "serde"] }
 tokio = { version = "1.47", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "time"] }
@@ -26,3 +33,9 @@ url = "2.5"
 
 [build-dependencies]
 slint-build = "=1.17.1"
+
+[profile.release]
+codegen-units = 1
+debug = 1
+lto = "thin"
+panic = "abort"

@@ -23,6 +23,7 @@ pub struct GeneratedImage {
     output_format: OutputFormat,
 }
 
+/// Validated storage result used to construct the durable domain object.
 pub(crate) struct PersistedImage {
     pub path: PathBuf,
     pub width: u32,

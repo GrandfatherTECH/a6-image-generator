@@ -52,6 +52,8 @@ enum CliError {
 }
 
 fn main() -> ExitCode {
+    slint::init_translations!("/usr/share/locale");
+
     if let Err(error) = init_diagnostics() {
         eprintln!("failed to initialize diagnostics: {error}");
         return ExitCode::FAILURE;

@@ -1,7 +1,13 @@
+//! Gateway wire types and response metadata.
+//!
+//! Optional image-generation fields are represented as `Option` values so
+//! compatibility settings omit rejected fields instead of serializing `null`.
+
 use serde::{Deserialize, Serialize};
 
 use crate::generation::GenerationOptions;
 
+/// JSON request sent to the gateway's image-generation endpoint.
 #[derive(Debug, Clone, Serialize)]
 pub struct ImageGenerationRequest<'a> {
     pub model: &'a str,
@@ -79,12 +85,14 @@ mod tests {
     }
 }
 
+/// Decoded image bytes and response headers returned by a successful request.
 #[derive(Debug)]
 pub struct ImageGenerationOutput {
     pub bytes: Vec<u8>,
     pub metadata: ResponseMetadata,
 }
 
+/// Result of checking the configured model-list endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelsCheck {
     pub http_status: u16,
@@ -92,6 +100,7 @@ pub struct ModelsCheck {
     pub metadata: ResponseMetadata,
 }
 
+/// Request and rate-limit headers captured from a gateway response.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResponseMetadata {
     pub request_id: Option<String>,

@@ -1,8 +1,23 @@
 # Developer Guide
 
+## Local setup
+
+Use a current stable Rust toolchain capable of compiling Rust 2024 edition code. Clone the repository, fetch the locked dependency graph, and run the non-networked test suite:
+
+```bash
+git clone https://github.com/grandfathertech/a6-image-generator.git
+cd a6-image-generator
+cargo fetch --locked
+cargo test --all-targets --locked
+```
+
+Linux desktop builds also need the native compiler, `pkg-config`, font, Wayland/X11, and optional Qt development/runtime dependencies required by Slint. Exact package names vary by distribution. Tests use local temporary files and mock HTTP servers; they do not require an API key, keyring, display server, or paid request.
+
+Never use a real API key in tests, fixtures, screenshots, issue reports, or diagnostic attachments. Use obviously synthetic values such as `test-api-key` where a credential-shaped value is required.
+
 ## Scope and phase discipline
 
-The repository currently implements Phase 5 plus the reviewed Phase 4 UI and response-integrity fixes. The permanent CLI, manually verified generation workflow, explicit state architecture, typed controls, format-aware output persistence, and result actions from earlier phases remain supported. Phase 5 includes validated persistent preferences, optional Secret Service/KWallet credentials, and transactional SQLite storage for sessions, generation history, and searchable diagnostic records.
+The repository implements Phases 0 through 6. The permanent CLI, generation workflow, explicit state architecture, typed controls, format-aware persistence, secure settings/history, reliability hardening, accessibility, localization hooks, and Arch/CachyOS packaging are all supported.
 
 The command-line interface is a permanent application surface, not throwaway probe code. Future GUI code should call the library modules rather than duplicate configuration or HTTP behavior.
 
@@ -24,10 +39,11 @@ src/domain.rs        durable generated-image application model
 src/app/state.rs     typed state machine and operation identity
 src/app/controller.rs configuration display, callbacks, workers, presentation
 src/app/actions.rs   Save As, clipboard, and containing-folder integrations
+src/diagnostics.rs   reduced, credential-redacted diagnostic JSON export
 src/storage/mod.rs   off-thread format conversion and atomic output commits
 src/xdg.rs           stable app ID, consolidated app root, legacy XDG discovery
 assets/              freedesktop scalable and raster application icons
-packaging/           desktop entry and AppStream metadata
+packaging/           desktop/AppStream metadata and Arch Linux PKGBUILD
 tests/               mock-server transport tests; never real API calls
 ```
 
@@ -54,13 +70,13 @@ informational, while a materially changed aspect ratio is a warning. Both remain
 successful durable results because discarding a paid response would cause data
 loss. The client never stretches, crops, or upscales the response.
 
-Output is written to a uniquely named hidden temporary file in the configured destination directory. The file is fully written, flushed, and synchronized before a same-directory rename exposes the final image. Failures attempt to remove the temporary file, so readers do not observe partial final output. Save As reuses the same atomic write path. Persisted history previews are loaded and decoded through the same bounded off-thread preview preparation path.
+Generated output is written to a uniquely named hidden temporary file in the configured destination directory. The file is fully written, flushed, and synchronized before an atomic hard link exposes a new, no-clobber final name. A bounded collision loop chooses another sequence value if the destination already exists. Save As uses same-directory atomic replacement after the native dialog confirms the destination. Permission and exhausted-storage errors receive explicit categories, and failures attempt to remove temporary files. Persisted history previews use the same bounded off-thread validation path, so corrupt or unsupported images produce structured errors.
 
 ## Settings, credentials, and persistence
 
 `AppPreferences` contains only the base URL, model, defaults, output directory, timeout, and history-retention switch. `PreferencesStore` reads and atomically replaces `~/.config/a6-studio/settings.json`; validation happens before a new backend is applied. If that file is absent, the former XDG `a6-image-studio/settings.json` is read once, its old default output path is changed to the new default, and the validated result is atomically written to the new location. `A6API_BASE_URL` and `A6API_IMAGE_MODEL` remain explicit process-level overrides and are identified in the UI.
 
-Credentials are deliberately outside the preferences and SQLite schemas. `secrets` resolves `A6API_KEY` first, then queries keyring 4's native Linux store using service `org.a6-studio.key`, the login username as the account, and the visible label `org.a6-studio.key.<sanitized-login-username>`. `keyring-core` supplies the Secret Service label modifier after keyring 4 initializes the platform-native store. Keyring work runs in `spawn_blocking`; the environment source is never silently migrated. Store and forget are explicit user actions. If the new entry is absent, the former `io.github.grandfathertech.a6-image-studio`/`A6API_KEY` entry is copied and removed only after the replacement succeeds. UI and debug formatting expose only `ApiKey::masked`.
+Credentials are deliberately outside the preferences and SQLite schemas. `secrets` resolves `A6API_KEY` first, then queries keyring 4's native Linux store using service `io.github.grandfathertech.A6ImageStudio.key`, the login username as the account, and the visible label `io.github.grandfathertech.A6ImageStudio.key.<sanitized-login-username>`. `keyring-core` supplies the Secret Service label modifier after keyring 4 initializes the platform-native store. Keyring work runs in `spawn_blocking`; the environment source is never silently copied. If the current entry is absent, the former `org.a6-studio.key` and `io.github.grandfathertech.a6-image-studio` identities remain readable for compatibility. Only explicit Store/Forget actions migrate or remove those entries. UI and debug formatting expose only `ApiKey::masked`.
 
 `HistoryRepository` owns one SQLite database at `~/.config/a6-studio/a6-studio.sqlite3`:
 
@@ -75,15 +91,21 @@ On first discovery, the repository transactionally imports the former `history.j
 
 HTTP error capture has two bounds: the transient summary is 4096 characters and the persisted sanitized body is at most 1 MiB. The exact active API key is replaced before either form leaves the transport layer. `ApiError::full_response` is implemented only for non-successful HTTP results, so successful Base64 image responses cannot enter diagnostics.
 
+The exported diagnostic schema is intentionally narrower than the SQLite error schema. It includes application/system identifiers and reduced error metadata, while omitting prompts, full provider bodies, paths, internal IDs, preferences, and image data. The current API key is redacted again during serialization.
+
 ## Desktop execution model
 
-`app::run` creates a separate multi-thread Tokio runtime for background work, enters its reactor context on the main thread, selects Slint's platform, sets `org.a6studio.A6ImageStudio` before creating a window, and then creates and runs the component there. Keeping the reactor entered for the lifetime of the Slint event loop is important because Linux desktop integrations and the Secret Service stack may acquire Tokio-backed `zbus` behavior through Cargo feature unification even when Slint polls their futures itself. Slint callbacks only validate input, transition application state, update immediate UI properties, and spawn work. They never await network, keyring, decoding, or filesystem operations.
+`app::run` creates a separate multi-thread Tokio runtime for background work, enters its reactor context on the main thread, selects Slint's platform, sets `io.github.grandfathertech.A6ImageStudio` before creating a window, and then creates and runs the component there. Keeping the reactor entered for the lifetime of the Slint event loop is important because Linux desktop integrations and the Secret Service stack may acquire Tokio-backed `zbus` behavior through Cargo feature unification even when Slint polls their futures itself. Slint callbacks only validate input, transition application state, update immediate UI properties, and spawn work. They never await network, keyring, decoding, or filesystem operations.
+
+The app uses the session D-Bus indirectly for Secret Service and XDG desktop portals. It does not own or register a custom D-Bus service name; the XDG app ID identifies the window/launcher independently.
 
 `BackendStore` permits validated Settings changes to atomically replace the active client/model/output-directory bundle without restarting the UI. `DesktopServices` shares preferences, credential state, the backend store, history repository, current session ID, and browser selection. Every process launch receives a fresh session identifier.
 
-`StateMachine` is the source of truth for the explicit `Idle`, `Connecting`, `Generating`, `Success`, `Cancelled`, and `Error` states. Each async operation receives a typed `OperationId`. `OperationControl` couples that state machine to the active Tokio `AbortHandle`; cancellation enters `Cancelled` before aborting the worker. A completion is accepted only if its ID still belongs to the active connecting or generating state, so a cancelled or superseded request cannot overwrite newer UI state.
+`StateMachine` is the source of truth for the explicit `Idle`, `Connecting`, `Generating`, `Success`, `Cancelled`, and `Error` states. Each async operation receives a typed `OperationId`. `OperationControl` couples that state machine to the active Tokio `AbortHandle`; it refuses a second request while one is active. Cancellation enters `Cancelled` before aborting the worker. A completion is accepted only if its ID still belongs to the active connecting or generating state. The close-request callback cancels and aborts the worker before the window hides, including during a retry delay.
 
 Worker completion uses `Weak<AppWindow>::upgrade_in_event_loop`. The closure asks the state machine to accept the operation ID before presenting its sanitized error or successful result. Closing the window drops the strong Slint handle and any later worker result is discarded.
+
+`ApiClient::send_with_retry` handles request/connection/timeouts and HTTP 429/5xx failures. It performs at most three total attempts, parses both delta-seconds and HTTP-date `Retry-After` values, and sleeps with exponential backoff plus bounded jitter. The sleep is inside the abortable Tokio worker, so normal cancellation and shutdown cover backoff without separate timer state.
 
 The transport layer returns raw generation output. After validation and persistence, the controller constructs `domain::GeneratedImage`, which records the final path, actual dimensions, byte size, elapsed time, response metadata, output format, and the exact successful `GenerationInput`. Successful generation state owns this domain object rather than transport bytes or ad-hoc UI strings. The controller pairs each domain object with its bounded `SharedPixelBuffer` in an in-memory `ResultStore`. The store retains at most six newest accepted results and tracks one selected result for preview and actions; rejected stale results never enter it. If retention is enabled, the accepted domain object is then converted into a metadata-only persistent history entry.
 
@@ -101,7 +123,9 @@ Result actions are independent of the generation state machine:
 - The default-output-directory chooser uses the same asynchronous portal integration.
 - All action completion text returns through `upgrade_in_event_loop`.
 
-The Slint root uses a `ScrollView` whose viewport height follows the selected section's natural height. `NavigationSelector` routes among Create, History, Error log, and Settings through one focusable `PopupWindow`; the popup owns its focus scope and close-on-outside-click behavior. `MotionSurface` gives each newly instantiated section a bounded 280 ms bottom-up reveal. Direct page components use layout stretch rather than binding themselves to the unpadded viewport width, so their right borders remain inside the root's asymmetric content padding. At 900 logical pixels Create changes from side-by-side to stacked panels; History and Error log replace their desktop columns with vertically scrollable master/detail cards, and Settings stacks its field groups.
+The Slint root uses a `ScrollView` whose viewport height follows the selected section's natural height. A surrounding `FocusScope` provides generation, cancellation, navigation, and diagnostic-export shortcuts. Native inputs carry accessible labels; custom recent/history/error rows participate in Tab traversal and activate with Space/Enter. `NavigationSelector` routes among Create, History, Error log, and Settings through one focusable `PopupWindow`; the popup owns its focus scope and close-on-outside-click behavior. `MotionSurface` gives each newly instantiated section a bounded 280 ms bottom-up reveal. Direct page components use layout stretch rather than binding themselves to the unpadded viewport width, so their right borders remain inside the root's asymmetric content padding. At 900 logical pixels Create changes from side-by-side to stacked panels; History and Error log replace their desktop columns with vertically scrollable master/detail cards, and Settings stacks its field groups.
+
+Static user-interface strings use Slint `@tr`, and startup initializes gettext under `/usr/share/locale`. API enum values and internal navigation identifiers remain untranslated because they are protocol/state tokens rather than display copy.
 
 `SlidingImage` retains two Slint image handles and alternates them to cross-slide a previous preview with the next one. Pixel decoding and buffer construction remain in the Rust worker path; the transition neither copies encoded payloads nor moves image work onto the event loop. Compatibility and result cards animate their existing bounded heights, while list and thumbnail hover/selection changes use short color and border transitions. The centralized `StudioTheme` derives surfaces from `Palette`, so system light/dark colors and native widget focus treatment remain authoritative. Shadows are shallow and transitions are limited to navigation, expansion, selection feedback, and image changes; there are no custom fonts, gradients, or glow effects.
 
@@ -134,24 +158,26 @@ independent of desktop state.
 
 ## Quality checks
 
-Run the complete Phase 5 verification set:
+Run the complete Phase 6 verification set:
 
 ```bash
 cargo fmt --all -- --check
 cargo check --all-targets
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 cargo build --release --locked
 ```
 
-Tests use a bounded local HTTP mock server and must not use the real gateway, keyring, or require `A6API_KEY`. Unit tests cover URL normalization, key masking/source labels, the visible per-user keyring label, endpoint construction, configurable timeout, Base64/URL parsing, malformed responses, full sanitized error capture, documented dimension boundaries, proportional and aspect-changing provider adjustments, optional-field omission, bounded previews, consolidated/legacy path discovery, settings migration, SQLite schema/version handling, one-time JSON import, database round trips, missing output files, recent-result selection, PNG/WebP/JPEG conversion, Save As extension checks, all state transitions, worker abortion, stale-result rejection, and atomic output commits. Integration tests verify request paths, exact `3840x2160` serialization, all generation JSON fields, bearer authentication, response metadata, error categorization, and URL fallback transport.
+Tests use a bounded local HTTP mock server and must not use the real gateway, keyring, or require `A6API_KEY`. Coverage includes URL normalization, key masking/source labels, endpoint construction, response parsing/redaction, retries and `Retry-After`, dimension/format validation, bounded previews, path/settings/database migration, SQLite round trips, missing/corrupt output behavior, recent selection, PNG/WebP/JPEG conversion, Save As checks, state transitions, duplicate prevention, cancellation/shutdown abortion, collision-safe output commits, and reduced diagnostic export.
 
 Validate the freedesktop assets as well:
 
 ```bash
-desktop-file-validate packaging/org.a6studio.A6ImageStudio.desktop
-appstreamcli validate --no-net packaging/org.a6studio.A6ImageStudio.metainfo.xml
-xmllint --noout assets/icons/hicolor/scalable/apps/org.a6studio.A6ImageStudio.svg
+desktop-file-validate packaging/io.github.grandfathertech.A6ImageStudio.desktop
+appstreamcli validate --no-net packaging/io.github.grandfathertech.A6ImageStudio.metainfo.xml
+xmllint --noout assets/icons/hicolor/scalable/apps/io.github.grandfathertech.A6ImageStudio.svg
+bash -n packaging/arch/PKGBUILD
 ```
 
 ## Adding behavior
@@ -165,12 +191,20 @@ xmllint --noout assets/icons/hicolor/scalable/apps/org.a6studio.A6ImageStudio.sv
 - Return worker results through `upgrade_in_event_loop`; do not access components from worker threads.
 - Preserve cancellation whenever adding an await point to a desktop operation.
 - Add mock transport tests for every new endpoint or compatibility behavior.
+- Add Rustdoc to public types and to private helpers whose invariants, security boundaries, retry behavior, or persistence semantics are not obvious from their signature.
+- Keep comments focused on contracts and reasons. Do not narrate straightforward assignments or duplicate the developer guide in source files.
 
-## Planned module growth
+## Contribution workflow
 
-Phase 5 is complete. Later phases complete installation/package assembly in the order defined by the product specification.
+Keep changes narrowly scoped and preserve the permanent CLI behavior unless the change explicitly updates that contract. Before opening a pull request, run the quality checks above, update user/developer documentation for behavior changes, and add an entry under `Unreleased` in `CHANGELOG.md` when the change affects users or packaging.
 
-## Phase 5 manual test checklist
+Pull requests should state whether they can trigger billable API activity, identify any persistence or migration impact, and include focused tests. See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the repository-wide workflow and [`SECURITY.md`](../SECURITY.md) for private vulnerability reporting.
+
+## Later work
+
+Phase 6 is complete. Editing, batch generation, plugins, and other post-stability ideas remain outside the current scope.
+
+## Phase 6 manual test checklist
 
 1. Start under KDE Wayland with `RUST_LOG=info cargo run`. Verify the log reports the preferred Winit backend, the window remains translucent, and KWin blurs content behind it. Repeat in an X11 session where available; translucency should remain but Winit blur may be unsupported. Run `SLINT_BACKEND=qt cargo run` only to verify the fallback/override.
 2. Resize across the 900-pixel responsive breakpoint and down to minimum width/height. Verify side-by-side panels become stacked and the scrollbar reaches every control and action.
@@ -185,7 +219,7 @@ Phase 5 is complete. Later phases complete installation/package assembly in the 
 11. Cancel an active generation, then start a connection test. Verify no late result replaces the newer state.
 12. Repeat the launch, scroll, and clipboard checks under X11 where available.
 13. Open Settings, change each ordinary default and the output directory, save, restart, and verify persistence. Test an invalid/relative output path and out-of-range timeout. If base/model environment overrides are present, verify the UI names them.
-14. With `A6API_KEY` unset, store a test key in the system keyring, restart, and verify the source is `system keyring`. In KeepSecret, verify the visible label is `org.a6-studio.key.<login-username>`. Then set `A6API_KEY`, restart, and verify `environment` takes precedence without copying it. `Forget stored key` must not affect the environment key.
+14. With `A6API_KEY` unset, store a test key in the system keyring, restart, and verify the source is `system keyring`. In KeepSecret, verify the visible label is `io.github.grandfathertech.A6ImageStudio.key.<login-username>`. Then set `A6API_KEY`, restart, and verify `environment` takes precedence without copying it. `Forget stored key` must not affect the environment key.
 15. Generate entries in two application launches. Confirm `~/.config/a6-studio/a6-studio.sqlite3` exists, search History by prompt, model, path, request ID, timestamp, and session, and load an old request into Create. Move one output file and verify the missing-file state preserves prompt/settings but disables file actions. Clear history and confirm image files remain.
 16. Trigger a safe local validation failure and a provider HTTP failure. Search Error log by session, prompt, category, request ID, and response text. Verify full captured response text is bound to the correct request, the API key is absent, and clearing the log does not delete outputs.
 17. Launch without either `A6API_KEY` or a stored key and verify the explicit unconfigured state appears without a crash or network request.
@@ -193,3 +227,7 @@ Phase 5 is complete. Later phases complete installation/package assembly in the 
 19. For migration QA, start from copies of the former `settings.json`, `history.json`, and `errors.json` plus the legacy keyring entry. Verify the settings and key are migrated, SQLite imports each JSON source once, the old JSON files remain unchanged, and existing image paths still work.
 20. Open and dismiss the app-section popup repeatedly with mouse and keyboard. Verify it falls into place without leaving stale focus, every destination enters gently from below, compatibility/request-detail height changes remain smooth, and rapid navigation never leaves two pages visible.
 21. Select several recent and History images in quick succession. Verify the outgoing preview slides/fades away while the incoming preview slides/fades in, the final selection always wins, and list/thumbnail selection feedback remains clear without obscuring image content.
+22. Against a local mock endpoint, return 429 or 5xx twice and success third. Verify three total requests, visible retry warnings under `RUST_LOG=warn`, `Retry-After` handling, and immediate cancellation during the delay. Verify authentication and ordinary 4xx responses are not retried.
+23. Rapidly invoke generation twice (including Ctrl+Enter) and verify only one billable request is created. Close the window during a request/backoff and verify the worker is aborted without a late file or UI update.
+24. Navigate all native controls and custom recent/history/error rows with Tab/Shift+Tab, activate rows with Space/Enter, and verify Ctrl+1 through Ctrl+4, Ctrl+Enter, Escape, and Ctrl+Shift+E. Inspect labels with the desktop accessibility tooling available on the test environment.
+25. Export diagnostics from Error log and verify prompts, response bodies, output/database paths, internal IDs, and the full API key are absent. Build the Arch package following `docs/PACKAGING.md`, validate launcher/AppStream/icons, and install only into a disposable test environment.

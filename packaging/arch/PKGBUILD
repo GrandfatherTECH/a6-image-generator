@@ -1,0 +1,67 @@
+# Maintainer: grandfathertech
+
+pkgname=a6-image-studio
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Linux desktop image-generation client for A6API'
+arch=('x86_64')
+url='https://github.com/grandfathertech/a6-image-generator'
+license=('LicenseRef-proprietary')
+depends=('fontconfig' 'gcc-libs' 'glibc' 'qt6-base')
+makedepends=('cargo')
+optdepends=(
+  'gnome-keyring: Secret Service provider on GNOME and compatible desktops'
+  'kwallet: Secret Service provider on KDE Plasma'
+  'wl-clipboard: image and prompt copying on Wayland'
+  'xclip: image and prompt copying on X11'
+  'xdg-desktop-portal: native file dialogs through the active desktop portal'
+)
+options=('debug')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# Replace SKIP with `b2sum a6-image-studio-$pkgver.tar.gz` before distribution.
+b2sums=('SKIP')
+
+prepare() {
+  cd "a6-image-generator-$pkgver"
+  export CARGO_HOME="$srcdir/cargo-home"
+  cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+  cd "a6-image-generator-$pkgver"
+  export CARGO_HOME="$srcdir/cargo-home"
+  export CARGO_INCREMENTAL=0
+  export CARGO_TARGET_DIR=target
+  export RUSTFLAGS="--remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
+  cargo build --frozen --offline --release
+}
+
+check() {
+  cd "a6-image-generator-$pkgver"
+  export CARGO_HOME="$srcdir/cargo-home"
+  export CARGO_INCREMENTAL=0
+  export CARGO_TARGET_DIR=target
+  export RUSTFLAGS="--remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
+  cargo test --frozen --offline --all-targets
+}
+
+package() {
+  cd "a6-image-generator-$pkgver"
+
+  install -Dm755 target/release/a6-image-studio \
+    "$pkgdir/usr/bin/a6-image-studio"
+  install -Dm644 packaging/io.github.grandfathertech.A6ImageStudio.desktop \
+    "$pkgdir/usr/share/applications/io.github.grandfathertech.A6ImageStudio.desktop"
+  install -Dm644 packaging/io.github.grandfathertech.A6ImageStudio.metainfo.xml \
+    "$pkgdir/usr/share/metainfo/io.github.grandfathertech.A6ImageStudio.metainfo.xml"
+
+  local size
+  for size in 16 24 32 48 64 128 256; do
+    install -Dm644 \
+      "assets/icons/hicolor/${size}x${size}/apps/io.github.grandfathertech.A6ImageStudio.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/io.github.grandfathertech.A6ImageStudio.png"
+  done
+  install -Dm644 \
+    assets/icons/hicolor/scalable/apps/io.github.grandfathertech.A6ImageStudio.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.grandfathertech.A6ImageStudio.svg"
+}

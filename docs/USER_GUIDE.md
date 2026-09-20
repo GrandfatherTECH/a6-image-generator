@@ -1,6 +1,6 @@
 # User Guide
 
-This guide documents the Phase 5 Slint desktop interface and the permanent command-line interface.
+This guide documents the Phase 6 Slint desktop interface and the permanent command-line interface.
 
 ## Requirements
 
@@ -8,6 +8,31 @@ This guide documents the Phase 5 Slint desktop interface and the permanent comma
 - An A6API API key with access to `gpt-image-2`.
 - Network access to the configured gateway.
 - A Wayland or X11 desktop session for the graphical interface.
+
+Optional desktop integrations require the corresponding system service or tool:
+
+| Feature | Runtime requirement |
+| --- | --- |
+| Store API key | A Secret Service provider such as GNOME Keyring or KWallet |
+| Save As and directory chooser | XDG Desktop Portal and the backend for the active desktop |
+| Copy on Wayland | `wl-copy` from `wl-clipboard` |
+| Copy on X11 | `xclip` |
+| Open containing folder | `xdg-open` |
+
+## Installation from source
+
+Build the reviewed lockfile with a current stable Rust toolchain:
+
+```bash
+git clone https://github.com/grandfathertech/a6-image-generator.git
+cd a6-image-generator
+cargo build --release --locked
+./target/release/a6-image-studio
+```
+
+The build may require the normal native development packages for a Rust Linux desktop application, including a C/C++ toolchain, `pkg-config`, font configuration libraries, and Wayland/X11 development libraries. Package names vary by distribution. Arch and CachyOS users can use the repository's PKGBUILD as documented in [`PACKAGING.md`](PACKAGING.md).
+
+No prebuilt binary is currently published. Building or installing the application does not contact the image-generation API; only connection checks and generation actions do.
 
 ## Configuration
 
@@ -52,13 +77,13 @@ The page controls the base URL, model ID, default dimensions/quality/format, out
 
 Entering a key and choosing `Store in system keyring` stores it through the Linux Secret Service API, normally backed by KWallet on KDE or GNOME Keyring on GNOME. The Settings page always identifies the active source as `environment`, `system keyring`, or `none` and displays only a masked key.
 
-- Secret Service managers such as KeepSecret display the intentional per-user label `org.a6-studio.key.<login-username>`.
-- The Secret Service lookup attributes are service `org.a6-studio.key` and username `<login-username>`.
+- Secret Service managers such as KeepSecret display the intentional per-user label `io.github.grandfathertech.A6ImageStudio.key.<login-username>`.
+- The Secret Service lookup attributes are service `io.github.grandfathertech.A6ImageStudio.key` and username `<login-username>`.
 - The application never writes an API key to `settings.json`, `a6-studio.sqlite3`, TOML, logs, or UI history.
 - Existing environment credentials are never silently copied into the keyring.
 - Storing a key while `A6API_KEY` is set does not replace the active environment key; it becomes available after the environment variable is removed and the application is restarted.
 - `Forget stored key` removes only the system-keyring entry. It cannot remove a key supplied by the process environment.
-- When no new entry exists, a stored Phase 5 entry named `keyring:A6API_KEY@io.github.grandfathertech.a6-image-studio` is copied to the new identity and removed only after the new write succeeds.
+- When no new entry exists, the app can read the former `org.a6-studio.key` and `io.github.grandfathertech.a6-image-studio` entries for compatibility without silently copying or deleting them. Explicitly storing or forgetting a key cleans up those legacy entries.
 
 ## Desktop interface
 
@@ -87,7 +112,20 @@ The app-name control opens an animated section menu. Create, History, Error log,
 
 `Test connection` calls the models endpoint and reports its HTTP status and whether the configured model is listed. A model missing from that list does not necessarily mean image generation is unavailable.
 
-`Generate image` is a potentially billable action. While the request is active, the connection and generation buttons are disabled, one busy indicator is visible beside the generation controls, and `Cancel` aborts the active asynchronous task. The preview canvas does not show a duplicate spinner. A cancelled or superseded operation cannot later replace the visible state.
+`Generate image` is a potentially billable action. While the request is active, the connection and generation buttons are disabled, one busy indicator is visible beside the generation controls, and `Cancel` aborts the active asynchronous task. The preview canvas does not show a duplicate spinner. Overlapping requests are rejected, and a cancelled operation cannot later replace the visible state.
+
+Temporary connection/request failures and HTTP 429/5xx responses are retried up to three total attempts. Backoff grows exponentially with jitter, and a valid `Retry-After` response header sets the minimum delay. Cancel and window close abort both an in-flight request and a waiting backoff timer.
+
+### Keyboard access
+
+Native controls participate in normal Tab/Shift+Tab navigation. Recent images, history rows, and error rows are also focusable and activate with Space or Enter. Application shortcuts are:
+
+| Shortcut | Action |
+| --- | --- |
+| Ctrl+Enter | Generate from Create when configured and idle |
+| Escape | Cancel the active connection or generation request |
+| Ctrl+1 / Ctrl+2 / Ctrl+3 / Ctrl+4 | Open Create / History / Error log / Settings |
+| Ctrl+Shift+E | Export sanitized diagnostics |
 
 ### Generation controls
 
@@ -214,6 +252,8 @@ Search covers all of those fields, including provider response text. The detail 
 
 Successful image responses and Base64 image payloads are never copied into the error log. The active API key is redacted before persistence. `Clear error log` removes the local diagnostic metadata.
 
+`Export diagnostics` writes a JSON report chosen through the native file dialog. The export includes application/system details and reduced error metadata, but deliberately excludes prompts, complete provider response bodies, internal error IDs, preferences, database/output paths, image payloads, and credentials. The active key is redacted again if it appears in an included summary.
+
 ## CLI commands
 
 Show command help:
@@ -296,10 +336,10 @@ On KDE Wayland, install `wl-clipboard` if `Copy image` or `Copy prompt` reports 
 The stable desktop application ID is:
 
 ```text
-org.a6studio.A6ImageStudio
+io.github.grandfathertech.A6ImageStudio
 ```
 
-Source assets are provided under `packaging/` and `assets/icons/hicolor/` for a later packaging phase. Package maintainers should install the desktop entry to `share/applications`, AppStream metadata to `share/metainfo`, and each icon to its corresponding `share/icons/hicolor` directory.
+Source assets and the Arch Linux PKGBUILD are provided under `packaging/`, with icons under `assets/icons/hicolor/`. See [`PACKAGING.md`](PACKAGING.md) for reproducible build, installation, checksum, and optional debug-symbol instructions.
 
 Application-managed state is consolidated below `~/.config/a6-studio` as requested. The user pictures directory remains the starting location for Save As:
 
